@@ -188,3 +188,12 @@ export const createReplay = (body: { patientId: string; scenario: string; speed:
   getJson<ReplaySession>("/api/replay/sessions", post(body));
 export const replayAction = (sessionId: string, action: "start" | "pause" | "resume" | "stop" | "reset") =>
   getJson<ReplaySession>(`/api/replay/sessions/${encodeURIComponent(sessionId)}/${action}`, post({}));
+
+export interface EvidenceItem { id: number; requirement: string; status: "PASS" | "PARTIAL" | "FAIL" | "BLOCKED"; evidence: string[]; verify: string }
+export interface Evidence {
+  generatedAt: string;
+  requirements: EvidenceItem[];
+  acceptance: null | { ranAt: string; command: string; commit?: string; checks: Record<string, { status: string; evidence: string }> };
+  dataProvenance: Record<string, string>;
+}
+export const fetchEvidence = () => getJson<Evidence>("/api/evidence");

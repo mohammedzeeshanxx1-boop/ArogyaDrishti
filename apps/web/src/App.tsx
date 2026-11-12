@@ -11,7 +11,9 @@ import {
   stopScenario,
   clearScale2,
   createReplay,
+  fetchEvidence,
   fetchLatestEvaluation,
+  type Evidence,
   runEvaluation,
   setScale2,
   type DetectorMode,
@@ -227,6 +229,55 @@ function EvaluationCard({ patientId }: { patientId: string | null }) {
   );
 }
 
+const STATUS_STYLE: Record<string, string> = {
+  PASS: "bg-teal-600 text-white", PARTIAL: "bg-amber-500 text-white", FAIL: "bg-red-600 text-white", BLOCKED: "bg-slate-500 text-white",
+};
+
+function EvidenceCard() {
+  const [ev, setEv] = useState<Evidence | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const load = () => fetchEvidence().then((e) => { setEv(e); setErr(null); }).catch((e) => setErr(String(e?.message ?? e)));
+  useEffect(() => { void load(); }, []);
+  return (
+    <Card title="Judge Evidence Console" right={<button type="button" onClick={() => void load()} className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold">Recompute</button>}>
+      {err && <p className="text-xs text-red-700">{err}</p>}
+      {!ev ? <p className="text-sm text-navy-500">Computing evidence from HAPI and saved reports…</p> : (
+        <div data-testid="evidence">
+          <p className="mb-2 text-[11px] text-navy-500">Computed {new Date(ev.generatedAt).toLocaleString()} from live HAPI data, the SQLite event store and saved reports. Data: {Object.entries(ev.dataProvenance).map(([k, v]) => `${k}: ${v}`).join(" · ")}</p>
+          <ul className="space-y-2">
+            {ev.requirements.map((r) => (
+              <li key={r.id} className="rounded-lg border border-slate-200 p-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded px-1.5 py-0.5 text-[11px] font-bold ${STATUS_STYLE[r.status]}`}>{r.status}</span>
+                  <span className="text-sm font-semibold text-navy-900">{r.id}. {r.requirement}</span>
+                </div>
+                <ul className="mt-1 text-xs text-navy-700">{r.evidence.filter(Boolean).map((e, i) => <li key={i}>• {e}</li>)}</ul>
+                <p className="mt-0.5 font-mono text-[10px] text-navy-500">verify: {r.verify}</p>
+              </li>
+            ))}
+          </ul>
+          {ev.acceptance ? (
+            <div className="mt-3 overflow-x-auto">
+              <p className="text-xs font-semibold text-navy-900">Last acceptance run: {new Date(ev.acceptance.ranAt).toLocaleString()} · <code>{ev.acceptance.command}</code>{ev.acceptance.commit ? ` · commit ${ev.acceptance.commit.slice(0, 7)}` : ""}</p>
+              <table className="mt-1 w-full min-w-[560px] text-left text-xs">
+                <tbody>
+                  {Object.entries(ev.acceptance.checks).map(([k, c]) => (
+                    <tr key={k} className="border-t border-slate-100 align-top">
+                      <td className="py-1 pr-2"><span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${STATUS_STYLE[c.status] ?? "bg-slate-200"}`}>{c.status}</span></td>
+                      <td className="pr-2 font-medium text-navy-900">{k.replace(/_/g, " ")}</td>
+                      <td className="text-navy-700">{c.evidence}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="mt-2 text-xs text-navy-500">No acceptance run recorded yet: run <code>scripts/acceptance.py</code>.</p>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function VitalCard({ v, monitor, alerts }: { v: (typeof VITALS)[number]; monitor: Monitor | null; alerts: Alert[] }) {
   const data = monitor?.vitals[v.key];
   const latest = data?.latest;
@@ -278,6 +329,9 @@ export default function App() {
   const [readBack, setReadBack] = useState<{ id: string; at: string; body: Record<string, any> } | { error: string } | null>(null);
   const inFlight = useRef(false);
   const [mode, setMode] = useState<DetectorMode>("personalized");
+  const [live, setLive] = useState<"websocket" | "polling" | "connecting">("connecting");
+  const liveRef = useRef(live);
+  liveRef.current = live;
 
   useEffect(() => {
     const load = () => fetchStatus().then(setStatus).catch(() => setStatus("down"));
@@ -315,11 +369,46 @@ export default function App() {
     }
   }, [selected, mode]);
 
+  // Live updates: WebSocket push from /ws/monitor/{id}; falls back to polling if the socket fails or stays silent.
   useEffect(() => {
+    if (!selected) return;
+    let alive = true;
+    let timer: number | undefined;
+    let ws: WebSocket | null = null;
+    setLive("connecting");
+    const startPolling = () => {
+      if (!alive || timer) return;
+      setLive("polling");
+      timer = window.setInterval(() => void poll(), POLL_MS);
+    };
+    try {
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${scheme}://${window.location.host}/ws/monitor/${encodeURIComponent(selected)}?mode=${mode}`);
+      ws.onmessage = (e) => {
+        try {
+          const m = JSON.parse(String(e.data));
+          if (m.type === "monitor" && alive) {
+            setMonitor(m.data);
+            setLive("websocket");
+            if (timer) { window.clearInterval(timer); timer = undefined; }
+          }
+        } catch { /* ignore malformed frames */ }
+      };
+      ws.onerror = () => startPolling();
+      ws.onclose = () => startPolling();
+    } catch {
+      startPolling();
+    }
+    // Allow time for the first push (one monitor build); then fall back to polling.
+    const watchdog = window.setTimeout(() => { if (liveRef.current !== "websocket") startPolling(); }, 10000);
     void poll();
-    const t = window.setInterval(() => void poll(), POLL_MS);
-    return () => window.clearInterval(t);
-  }, [poll]);
+    return () => {
+      alive = false;
+      window.clearTimeout(watchdog);
+      if (timer) window.clearInterval(timer);
+      ws?.close();
+    };
+  }, [poll, selected, mode]);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -506,6 +595,9 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+                <span data-testid="live-mode" className="text-[11px] font-semibold text-navy-700">
+                  {live === "websocket" ? "● Live via WebSocket" : live === "polling" ? "● Live via polling (WebSocket unavailable)" : "Connecting…"}
+                </span>
                 <p className="text-[11px] text-navy-500">
                   {monitor ? `${monitor.observationCount} observations since ${time(monitor.windowStart)} · evaluated ${time(monitor.evaluatedAt)}` : ""}
                 </p>
@@ -607,6 +699,7 @@ export default function App() {
           </Card>
           <Scale2Card patientId={selected} status={monitor?.scale2 ?? null} onAction={act} busy={busy} />
           <EvaluationCard patientId={selected} />
+          <EvidenceCard />
         </div>
       </main>
 

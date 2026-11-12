@@ -109,3 +109,17 @@ def test_bad_ids_are_rejected_before_any_fhir_call(tmp_path):
         assert c.get("/api/fhir/Observation/bad id!").status_code == 400
         assert c.get("/api/inspector/observations/..%2F..").status_code in (400, 404)
         assert c.get("/api/fhir/Observation", params={"patient": "p1", "code": "1234-5"}).status_code == 400
+
+
+def test_monitor_websocket_rejects_bad_input(tmp_path):
+    with client_for(tmp_path, FakeHapi()) as c, c.websocket_connect("/ws/monitor/bad id!?mode=personalized") as ws:
+        assert ws.receive_json()["type"] == "error"
+
+
+def test_evidence_console_reports_blocked_when_hapi_is_down(tmp_path):
+    with client_for(tmp_path, FakeHapi(down=True)) as c:
+        ev = c.get("/api/evidence").json()
+    status = {r["id"]: r["status"] for r in ev["requirements"]}
+    assert len(status) == 7 and status[1] == "BLOCKED" and status[3] == "BLOCKED"
+    assert status[2] == "PARTIAL" and status[4] == "PARTIAL"     # BIDMC missing; NEWS2 chart unverified
+    assert ev["acceptance"] is None and ev["evaluation"] is None
