@@ -1,4 +1,6 @@
 export type ServiceState = "ok" | "unreachable" | "error" | "checking";
+export type RiskLevel = "NORMAL" | "WATCH" | "REVIEW" | "URGENT";
+export type VitalKey = "heart_rate" | "spo2" | "respiratory_rate" | "body_temperature";
 
 export interface StatusResponse {
   checkedAt: string;
@@ -10,40 +12,105 @@ export interface StatusResponse {
   };
 }
 
-export async function fetchStatus(signal?: AbortSignal): Promise<StatusResponse> {
-  const resp = await fetch("/api/v1/status", { signal });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return (await resp.json()) as StatusResponse;
+export interface PatientSummary {
+  id: string;
+  name: string;
+  gender?: string;
+  birthDate?: string;
+  age?: number;
+  lastDischarge?: string;
+  activeConditions: number;
+  activeMedications: number;
 }
 
-/** Opens the heartbeat socket once and resolves true if the server says hello. */
-export function probeWebSocket(timeoutMs = 4000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (ok: boolean, ws?: WebSocket) => {
-      if (settled) return;
-      settled = true;
-      ws?.close();
-      resolve(ok);
-    };
-    try {
-      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${scheme}://${window.location.host}/ws/heartbeat`);
-      const timer = window.setTimeout(() => finish(false, ws), timeoutMs);
-      ws.onmessage = (event) => {
-        window.clearTimeout(timer);
-        try {
-          finish(JSON.parse(String(event.data)).type === "hello", ws);
-        } catch {
-          finish(false, ws);
-        }
-      };
-      ws.onerror = () => {
-        window.clearTimeout(timer);
-        finish(false, ws);
-      };
-    } catch {
-      finish(false);
-    }
-  });
+export interface PatientProfile {
+  patient: { id: string; name: string; gender?: string; birthDate?: string; age?: number; syntheaId?: string };
+  discharge: { encounter: string; type?: string; admitted?: string; discharged?: string; facility?: string; inpatientStays: number } | null;
+  activeConditions: { id: string; condition?: string; onset?: string }[];
+  activeMedications: { id: string; medication?: string; authoredOn?: string }[];
+  allergies: { id: string; substance?: string }[];
 }
+
+export interface Point {
+  effective: string;
+  value: number;
+  observation: string;
+}
+
+export interface Alert {
+  level: RiskLevel;
+  ruleType: "threshold" | "trend" | "multi-parameter";
+  vital: VitalKey | null;
+  vitalLabel: string;
+  value: number;
+  unit: string;
+  rule: string;
+  observation: string;
+  effective: string;
+  reason: string;
+}
+
+export interface SimulatorState {
+  running: boolean;
+  runId: string | null;
+  patientId: string | null;
+  scenario: "stable" | "deterioration" | null;
+  scenarioLabel: string | null;
+  step: number;
+  totalSteps: number;
+  intervalSeconds: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  stopped: boolean;
+  accepted: number;
+  rejected: number;
+  lastError: string | null;
+  lastObservationId: string | null;
+}
+
+export interface FhirProof {
+  observation: string;
+  id: string;
+  versionId?: string;
+  lastUpdated?: string;
+  hapiUrl: string;
+  readBackMatches: boolean | null;
+  hapiValidationErrors: number | null;
+}
+
+export interface Monitor {
+  patientId: string;
+  windowStart: string;
+  evaluatedAt: string;
+  observationCount: number;
+  vitals: Record<VitalKey, { label: string; unit: string; series: Point[]; latest: Point | null }>;
+  risk: { level: RiskLevel; alerts: Alert[]; readingsConsidered: number; label: string; summary: string };
+  fhirProof: FhirProof | null;
+  simulator: SimulatorState | null;
+}
+
+async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(url, init);
+  const body = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const msg = body?.issue?.[0]?.diagnostics ?? body?.detail ?? `HTTP ${resp.status}`;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return body as T;
+}
+
+const post = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+export const fetchStatus = () => getJson<StatusResponse>("/api/v1/status");
+export const fetchPatients = () => getJson<{ count: number; patients: PatientSummary[] }>("/api/patients");
+export const fetchProfile = (id: string) => getJson<PatientProfile>(`/api/patients/${encodeURIComponent(id)}/profile`);
+export const fetchMonitor = (id: string) => getJson<Monitor>(`/api/demo/monitor/${encodeURIComponent(id)}`);
+export const fetchObservation = (id: string) => getJson<Record<string, any>>(`/api/fhir/Observation/${encodeURIComponent(id)}`);
+export const startScenario = (patientId: string, scenario: "stable" | "deterioration") =>
+  getJson<SimulatorState>("/api/demo/simulator/start", post({ patientId, scenario }));
+export const stopScenario = () => getJson<SimulatorState>("/api/demo/simulator/stop", post({}));
+export const resetDemo = (patientId: string) => getJson<{ windowStart: string }>("/api/demo/reset", post({ patientId }));

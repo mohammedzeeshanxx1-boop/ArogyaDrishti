@@ -24,6 +24,13 @@ See [CHECKPOINTS.md](CHECKPOINTS.md) for every command and its actual result.
 
 App-only event metadata goes to SQLite on the `api` volume. FHIR resources are never stored there.
 
+## Round 1 demo (MVP)
+
+```bash
+scripts/dev/up.sh            # then open http://localhost:5173
+```
+Pick a patient → **Demonstrate Gradual Deterioration** (risk escalates WATCH → REVIEW → URGENT in about 30 s) or **Demonstrate Stable Recovery** (stays NORMAL). The script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md). The risk engine is a labelled prototype (not NEWS2); see CHECKPOINTS.md "ROUND 1 MVP" for exactly what is and is not built.
+
 ## Run on localhost (development)
 
 Needs Python 3.10+, Node 20+, Java 11+ on PATH (for Synthea) and curl.
@@ -60,6 +67,9 @@ scripts/smoke.sh
 | `GET /api/patients/{id}/profile` | Discharge profile with completeness check |
 | `GET /api/inspector/observations/{id}` | Stored Observation with live validation and ingestion history |
 | `GET /api/inspector/ingestions` | Recent accepted and rejected submissions |
+| `POST /api/demo/simulator/start` · `/stop` · `GET /api/demo/simulator` | Virtual wearable (scenarios `stable`, `deterioration`) |
+| `POST /api/demo/reset` | Start a fresh monitoring window for a patient |
+| `GET /api/demo/monitor/{id}` | Vitals, prototype risk with explanations, FHIR proof (all read from HAPI) |
 | `GET /api/v1/status`, `/api/v1/meta`, `/health`, `WS /ws/heartbeat` | Service status |
 
 Rejections are FHIR `OperationOutcome` resources. Interactive docs: http://localhost:8000/docs.

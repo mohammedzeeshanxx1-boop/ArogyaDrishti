@@ -7,6 +7,7 @@ are identified by Synthea's identifier system. All data is synthetic.
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 
 from .fhir import FhirClient
 from .vitals import LOINC, VITALS
@@ -34,6 +35,14 @@ def _status(cc: dict | None) -> str | None:
     return next((c.get("code") for c in (cc or {}).get("coding", [])), None)
 
 
+def age(birth: str | None, today: date | None = None) -> int | None:
+    if not birth:
+        return None
+    today = today or date.today()
+    b = date.fromisoformat(birth[:10])
+    return today.year - b.year - ((today.month, today.day) < (b.month, b.day))
+
+
 def _is_synthea(p: dict) -> bool:
     return any(i.get("system") == SYNTHEA_ID_SYSTEM for i in p.get("identifier", []))
 
@@ -54,6 +63,7 @@ async def list_patients(fhir: FhirClient) -> list[dict]:
             "name": _name(p),
             "gender": p.get("gender"),
             "birthDate": p.get("birthDate"),
+            "age": age(p.get("birthDate")),
             "synthetic": True,
             "lastDischarge": (enc or {}).get("period", {}).get("end"),
             "activeConditions": conds,
@@ -112,6 +122,7 @@ async def patient_profile(fhir: FhirClient, pid: str) -> dict | None:
             "name": _name(patient),
             "gender": patient.get("gender"),
             "birthDate": patient.get("birthDate"),
+            "age": age(patient.get("birthDate")),
             "syntheaId": next((i.get("value") for i in patient.get("identifier", []) if i.get("system") == SYNTHEA_ID_SYSTEM), None),
             "synthetic": _is_synthea(patient),
         },
