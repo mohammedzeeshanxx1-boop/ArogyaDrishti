@@ -11,8 +11,9 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 | ID | Scope | Status |
 |---|---|---|
 | C0 | Scaffold and service startup | PASS on localhost; container start BLOCKED (B2, deferred) |
-| C1 | FHIR R4 Vital Signs ingestion and HAPI storage (req. 1); Synthea discharge profiles (req. 3) | PASS on localhost with native HAPI |
-| C2 | Virtual wearable simulator and BIDMC replay (req. 2) | **Next.** Simulator unblocked; real BIDMC download BLOCKED in this workspace (B4) |
+| C1 | FHIR R4 Vital Signs ingestion and HAPI storage (req. 1); Synthea discharge profiles (req. 3) | PASS on localhost with native HAPI; re-verified as Phase 1 |
+| R1-MVP | Round 1 end-to-end demo (simulator, prototype risk rules, dashboard, FHIR proof) | PASS, demo scope only (see below) |
+| C2 | Virtual wearable simulator and BIDMC replay (req. 2) | Partial: demo simulator exists (R1-MVP); BIDMC replay not started, download BLOCKED here (B4) |
 | C3 | (requirement 3 was delivered in C1) | — |
 | C4 | NEWS2-style baseline and at least 2 personalization rules (req. 4) | Not started |
 | C5 | Sensor artifact detection and false-alert suppression (req. 5) | Not started |
@@ -27,6 +28,73 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 | B2 | Container registries (Docker Hub, GHCR, Quay, ECR) and Maven Central denied from the build workspace; no container built or started | Deferred: development is localhost-first. Must be cleared before container deployment |
 | B3 | `scripts/smoke.sh` (container smoke test) never executed | Deferred with B2 |
 | B4 | Real BIDMC recordings cannot be downloaded in the build workspace: `physionet.org` and the `physionet-open` S3 bucket are both denied by its network policy (checked 2026-11-12) | Open; blocks the BIDMC half of C2 here. Clears if the files are added to the repo machine, or if PhysioNet is allowed for this workspace |
+
+---
+
+## ROUND 1 MVP: end-to-end demo prototype (2026-11-12)
+
+**Scope: a working demonstration for the Round 1 evaluation. This is NOT completion of Phases 2–6.** It adds a minimal simulator, a prototype risk engine and a dashboard on top of the verified Phase 1 FHIR work. Not built: BIDMC replay, NEWS2 baseline, personalization rules, the Sensor Trust Engine / artifact suppression, Watch/Review/Urgent alert lifecycle beyond the live view, Replay Lab, comparative report, and the Judge Evidence Console.
+
+Pipeline: Synthea patient (HAPI) → virtual wearable → `POST /api/fhir/Observation` (strict validation + HAPI `$validate`) → HAPI FHIR R4 → prototype risk rules over stored observations → React dashboard (polls every 1.5 s).
+
+### What was added
+
+| Item | Where |
+|---|---|
+| Deterministic wearable simulator: 2 scenarios (Stable Recovery, Gradual Deterioration), 20 steps × 4 vitals, 2 s apart (about 40 s). Posts every reading over HTTP to the existing ingestion endpoint; CLI `python -m app.simulator` | `apps/api/app/simulator.py` |
+| Prototype risk rules engine: per-vital threshold bands (WATCH/REVIEW/URGENT), trend rules over the last 6 readings, multi-parameter rule (≥3 abnormal vitals → REVIEW). Labelled "not NEWS2, not clinically validated". Input is only stored values, times and Observation ids; no scenario label | `apps/api/app/risk.py` |
+| Endpoints `POST /api/demo/simulator/start`, `POST /api/demo/simulator/stop`, `GET /api/demo/simulator`, `POST /api/demo/reset`, `GET /api/demo/monitor/{patientId}` (vitals series, risk and FHIR proof, all read from HAPI) | `apps/api/app/main.py` |
+| `age` on patient list and profile | `apps/api/app/patients.py` |
+| Dashboard: patient list, profile (conditions, medications, discharge), judge controls (Stable, Deterioration, Stop, Reset), risk banner with explanation table, 4 live vital cards with trend charts and WATCH lines, FHIR proof panel with live HAPI read-back, FHIR connection pill | `apps/web/src/App.tsx`, `api.ts` |
+| 60-second judge script | `docs/DEMO_SCRIPT.md` |
+
+### Verification (all on localhost, no Docker)
+
+| # | Check | Status | Evidence |
+|---|---|---|---|
+| 1 | Backend health | **PASS** | `scripts/dev/health.sh`: 8 PASS, `HEALTH: no failures, 0 blocked` (HAPI 5.7.0 / FHIR 4.0.1, 8 Synthea patients, API, SQLite, web, proxy, WebSocket) |
+| 2 | Frontend loads | **PASS** | Headless Chrome (Playwright) on http://localhost:5173: 8 patients listed, pill "HAPI FHIR R4 connected · 4.0.1", 0 console errors |
+| 3 | Patient API | **PASS** | Live tests (≥5 complete profiles); dashboard shows name, age, conditions and medications from `/api/patients` and `/api/patients/{id}/profile` |
+| 4 | Simulated readings reach the backend | **PASS** | Each UI run: 80 observations stored in HAPI, 0 rejected. Unit test: 3 steps → 12 observations through the ingestion endpoint, all accepted |
+| 5 | HAPI read-back | **PASS** | UI "Read back from HAPI now": deterioration run Observation/11761 (bodytemp 39.3 Cel, versionId 1, profile `bodytemp`), stable run Observation/11841 (36.8 Cel); HAPI `$validate` 0 errors; ingest read-back matched |
+| 6 | Risk changes during deterioration | **PASS** | Browser run (patient Ariane Kirlin), risk read from the page every 3 s: NORMAL until about 12 s, **WATCH at 15 s, REVIEW at 21 s, URGENT at 27 s**, scenario done at 39 s. Final alerts: HR 134 /min, RR 31 /min, SpO2 88 % URGENT; temperature 39.3 °C REVIEW; multi-parameter REVIEW; 3 trend WATCH alerts, each with Observation ids |
+| 6b | Repeat after polish fixes and restart | **PASS** | Second browser run: WATCH at 15 s, REVIEW at 24 s, URGENT at 30 s (sampled every 3 s), done at 42 s; read-back Observation/11937. Stable run NORMAL throughout; read-back Observation/12017. 0 console errors. Screenshots: `docs/screenshots/r1-*.png` |
+| 7 | Stable scenario stays normal | **PASS** | Browser run (patient Mark Lueilwitz): NORMAL at every sample for 43 s. Unit test: NORMAL at every step |
+| 8 | Tests and build | **PASS** | `scripts/check.sh`: API unit/flow 75 passed, live HAPI 21 passed, scaffold 28 passed, web type-check, 3 tests and build passed, Compose config valid: `ALL CHECKS PASSED` |
+
+Unit tests added: scenarios deterministic and every generated reading valid FHIR; stable never leaves NORMAL; deterioration escalates monotonically NORMAL→…→URGENT and passes through WATCH and REVIEW; every alert has rule, reason and observation; risk depends on values only; simulator posts through the ingestion endpoint; unknown patient or scenario rejected.
+
+### Known limitations (honest)
+
+- Risk thresholds are simplified demonstration bands, not NEWS2, not personalised, not clinically validated.
+- No artifact detection: a probe-off reading would raise an alert.
+- Simulated readings use real current timestamps; the scenario represents a compressed deterioration, not real elapsed physiology.
+- One simulator run at a time (single API process, in memory). The monitoring window (`Reset demo`) is in memory and resets when the API restarts (defaults to the last 30 minutes).
+- Every demo run adds 80 real Observations to HAPI; they are tagged with the simulator run id.
+
+---
+
+## Phase 1 verification: FHIR and patient profiles, localhost (2026-11-12)
+
+Re-verification of the C1 work under the Phase 1 brief, on localhost with no Docker. Existing code was inspected, not rebuilt. One gap was closed: there was no plain endpoint to retrieve a single stored Observation, so `GET /api/fhir/Observation/{id}` was added. It reads from HAPI and returns the resource as HAPI stores it, with 404/400 as `OperationOutcome`. `scripts/dev/health.sh` now also counts BLOCKED checks in its summary.
+
+| # | Phase 1 item | Status | Evidence (all from this run) |
+|---|---|---|---|
+| 1 | HAPI FHIR R4 as a local Java service with persistent storage | **PASS** | `scripts/dev/up.sh`: HAPI FHIR Server 5.7.0, FHIR 4.0.1 at `http://localhost:8090/baseR4` (Java 11). Data is the H2 file `.local/hapi/data/target/jpaserver_h2_files.mv.db` (53.8 MB). Its mtime changed when an Observation was ingested. Restart test below |
+| 2 | FastAPI ingestion for HR 8867-4, SpO2 2708-6, RR 9279-1, temperature 8310-5, tested | **PASS** | Live: each vital (temperature in °C and °F) returns 201 with HAPI `$validate` 0 errors. Unit: 36 invalid payloads rejected at the expected FHIR path |
+| 3 | Each valid Observation stored in HAPI and retrievable | **PASS** | Live tests read every ingested Observation **directly from HAPI**, again via `GET /api/fhir/Observation/{id}` (identical to HAPI's copy), and via patient+code search. Spot check: Observation 11580 (RR 19 /min) → API 201, HAPI GET 200 versionId 1, API GET identical |
+| 4 | ≥5 real Synthea profiles with Conditions and medications, imported | **PASS** | `scripts/dev/seed.sh all` regenerated from scratch with Synthea v3.4.0 (18 patients, 29.2 s) and selected the same 8 patients. Cohort ids, source-bundle and import-bundle SHA-256 are identical to the earlier run. Re-import: 8 transactions, 0 errors (4 m 29 s total, slower because every resource was re-versioned). `verify`: 8/8 OK |
+| 5 | `GET /api/patients`, `GET /api/patients/{id}/profile`, ingestion and retrieval endpoints | **PASS** | `POST /api/fhir/Observation`, `GET /api/fhir/Observation/{id}`, `GET /api/fhir/Observation?patient=&code=`; patient endpoints covered by live tests (≥5 patients, every profile complete, unknown patient 404) |
+| 6 | Environment variables for local service URLs | **PASS** | `.env.local.example` / `.env.local`; scaffold tests assert localhost defaults and no container hostnames in local code |
+| 7 | Integration tests with evidence | **PASS** | `scripts/check.sh` (no URL overrides): API unit/flow **67 passed**, live HAPI **21 passed**, scaffold/contract **28 passed**, web type-check, 3 tests and build passed, Compose config valid: `ALL CHECKS PASSED` |
+| — | No JSON files or in-memory store standing in for HAPI | **PASS** | The API's SQLite has only `app_meta` and `ingestion_events` (ids, hashes, outcomes, validation summaries); no Observation content. Every read path goes to HAPI. Unit tests use an in-memory stand-in only for API control flow; they make no persistence claim and are counted separately from the live tests |
+| — | No Docker | **PASS** | All processes native: Java (HAPI, Synthea), Python (API, pipeline), Node (Vite) |
+
+Restart test: `c1_persistence_check.py record` ingested Observations 11581–11584 (one per vital). `scripts/dev/down.sh` stopped web, API and HAPI (no HAPI process left). `scripts/dev/up.sh hapi api` restarted them. `check` → all 4 Observations unchanged and all 8 patients present: `PERSISTENCE CHECK PASSED`.
+
+Health after the run: 8 PASS, `HEALTH: no failures, 0 blocked`.
+
+Not covered by Phase 1 and unchanged: the Docker/PostgreSQL path (B2, deferred) and the PS-03 PDF (B1).
 
 ---
 

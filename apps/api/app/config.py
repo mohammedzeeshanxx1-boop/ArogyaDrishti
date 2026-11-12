@@ -17,6 +17,7 @@ class Settings:
     sqlite_path: str
     cors_origins: tuple[str, ...]
     fhir_request_timeout_seconds: float = 60.0  # reads, $validate, writes
+    simulator_api_url: str = "http://localhost:8000"  # where the simulator POSTs observations
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -27,4 +28,5 @@ class Settings:
             sqlite_path=os.environ.get("APP_SQLITE_PATH", "./data/app.db"),
             cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
             fhir_request_timeout_seconds=float(os.environ.get("FHIR_REQUEST_TIMEOUT_SECONDS", "60")),
+            simulator_api_url=os.environ.get("SIMULATOR_API_URL", f"http://localhost:{os.environ.get('API_PORT', '8000')}"),
         )

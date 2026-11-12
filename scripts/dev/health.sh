@@ -6,7 +6,8 @@ set -uo pipefail
 API="http://localhost:$API_PORT"
 WEB="http://localhost:$WEB_PORT"
 fail=0
-report() { printf "%-8s %s\n" "$1" "$2"; [ "$1" = FAIL ] && fail=1; return 0; }
+blocked=0
+report() { printf "%-8s %s\n" "$1" "$2"; [ "$1" = FAIL ] && fail=1; [ "$1" = BLOCKED ] && blocked=$((blocked+1)); return 0; }
 up() { curl -fs -o /dev/null --max-time 5 "$1"; }
 
 # HAPI
@@ -49,5 +50,5 @@ else
   report BLOCKED "web    not reachable at $WEB (scripts/dev/up.sh web)"
 fi
 
-[ $fail -eq 0 ] && echo "HEALTH: no failures" || echo "HEALTH: FAILURES"
+[ $fail -eq 0 ] && echo "HEALTH: no failures, $blocked blocked" || echo "HEALTH: FAILURES ($blocked blocked)"
 exit $fail
