@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import random
 import uuid
 from dataclasses import dataclass, field
@@ -173,6 +174,10 @@ class Simulator:
 
 async def _cli(args) -> None:
     async with httpx.AsyncClient(base_url=args.api, timeout=60) as client:
+        if os.environ.get("AROGYA_USER"):   # the API requires a signed-in doctor to ingest observations
+            r = await client.post("/api/auth/login", json={"username": os.environ["AROGYA_USER"], "password": os.environ.get("AROGYA_PASSWORD", "")})
+            if r.status_code != 200:
+                raise SystemExit(f"sign-in failed: HTTP {r.status_code} {r.text[:200]}")
         sim = Simulator(client)
         await sim.start(args.patient, args.scenario, args.steps, args.interval)
         while sim.state.running:

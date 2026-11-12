@@ -31,10 +31,10 @@ export function MonitoringBadge({ status }: { status: MonitoringStatus }) {
 
 export function Card({ title, children, right, className = "" }: { title?: string; children: ReactNode; right?: ReactNode; className?: string }) {
   return (
-    <section className={`min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 ${className}`}>
+    <section className={`min-w-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}>
       {(title || right) && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          {title && <h2 className="text-sm font-semibold text-navy-900">{title}</h2>}
+          {title && <h2 className="text-base font-semibold text-navy-900">{title}</h2>}
           {right}
         </div>
       )}
@@ -65,9 +65,10 @@ export const ago = (iso?: string | null) => {
 };
 export const tidyCondition = (s?: string) => (s ?? "").replace(/\s*\((disorder|finding|situation|procedure)\)$/i, "");
 
-export const VITAL_META: Record<string, { label: string; unit: string; decimals: number }> = {
-  heart_rate: { label: "Heart rate", unit: "/min", decimals: 0 },
-  spo2: { label: "Oxygen saturation (SpO₂)", unit: "%", decimals: 0 },
-  respiratory_rate: { label: "Respiratory rate", unit: "/min", decimals: 0 },
-  body_temperature: { label: "Body temperature", unit: "°C", decimals: 1 },
+// Display units (the stored FHIR values use UCUM: /min, %, Cel).
+export const VITAL_META: Record<string, { label: string; short: string; unit: string; decimals: number; step: number }> = {
+  heart_rate: { label: "Heart rate", short: "Heart rate", unit: "bpm", decimals: 0, step: 3 },
+  spo2: { label: "Oxygen saturation (SpO₂)", short: "SpO₂", unit: "%", decimals: 0, step: 1 },
+  respiratory_rate: { label: "Respiratory rate", short: "Respiratory rate", unit: "breaths/min", decimals: 0, step: 2 },
+  body_temperature: { label: "Body temperature", short: "Temperature", unit: "°C", decimals: 1, step: 0.2 },
 };

@@ -31,6 +31,17 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## AROGYA DRISHTI 2.0 Phase 1: Doctor Portal and Patient Portal (2026-11-13, branch localhost-dev)
+
+Checkpoint before changes: branch `checkpoint/pre-portals` (= `7090cc1`).
+
+- Server-enforced sign-in (new `app/auth.py`): per-account random passwords (PBKDF2), HttpOnly session cookies, deny-by-default ASGI middleware for HTTP and WebSocket; patients can read only their own profile/monitor. `scripts/dev/accounts.sh` provisions accounts.
+- New frontend: sign-in page, sidebar shell, Doctor Portal (`#/doctor`: dashboard, directory, monitoring page with Demo / Simulation section, alerts), Patient Portal (`#/me`: My Health, Trends, Records, Profile). WebSocket with reconnection and polling fallback shared by both portals. Risk engine, FHIR pipeline, simulator and thresholds unchanged.
+
+Verified here (Linux, headless Chrome): doctor dashboard counts equal the API overview; directory search/filter/sort; Alex Lang deterioration run updated the doctor monitor and Alex's Patient Portal in step (NORMAL → WATCH → REVIEW → URGENT); patient account: own profile/monitor 200, other patient / directory / alerts / simulator 403, doctor routes redirect to `#/me`; signed-out API 401; mobile 390 px without overflow; no FHIR ids or LOINC codes outside the Technical details section. Tests: 129 backend unit (6 new auth), 8 web, type-check, build; acceptance 17 PASS, 0 FAIL, 1 BLOCKED (BIDMC). Not verified on macOS.
+
+---
+
 ## Live Simulation restored on the patient page (2026-11-12, branch localhost-dev)
 
 Patient page order: patient information → Live Simulation (scenario, Start, Stop, Reset, progress bar, status Idle/Running/Completed/Stopped/Error) → four live vital cards with trend charts → risk assessment → alert history → SpO₂ Scale 2 configuration. Uses the existing simulator endpoints (`/api/demo/simulator/start|stop`, `/api/demo/reset`) and the existing WebSocket with polling fallback.

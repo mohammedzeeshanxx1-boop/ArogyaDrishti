@@ -26,9 +26,12 @@ App-only event metadata goes to SQLite on the `api` volume. FHIR resources are n
 
 ## Using the prototype
 
-Start the services (below), open http://localhost:5173 and pick a patient. The dashboard shows each discharged patient's monitoring status, latest vitals, risk level with reasons, alert history and SpO₂ scale. Patients without recent readings are shown as **Not assessed**.
+Start the services (below), create the local accounts once with `scripts/dev/accounts.sh`, then open http://localhost:5173 and sign in.
 
-No monitoring source runs by default. To stream **simulated** readings, open a patient and use the **Live Simulation** panel (Stable Recovery or Gradual Deterioration; Start, Stop, Reset). Readings are labelled simulated, go through the normal FHIR ingestion pipeline and appear on the page as they arrive (one set every 2 s, 20 steps). Start and Reset show only the new run; earlier Observations stay in HAPI FHIR. The same source can be run from a terminal: `scripts/dev/simulate.sh <patient-id> deterioration`. Developer tools (simulator, replay, evaluation, acceptance test) are described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+- **Doctor Portal** (`#/doctor`, account `doctor`): dashboard with patient counts derived from live data, patient directory (search, status filter, sort), patient monitoring page (four live vital cards, interactive trend charts with time ranges, plain-language risk assessment with an expandable technical section, alert history, SpO₂ Scale 2 configuration) and a clearly labelled Demo / Simulation section (Stable Recovery or Gradual Deterioration; Start, Stop, Reset).
+- **Patient Portal** (`#/me`, one account per synthetic patient): My Health, My Health Trends, My Medical Records, My Profile. A patient account can read only its own record; the server enforces this.
+
+Accounts have random passwords (printed by `accounts.sh` and kept in `.local/api/credentials.json`, mode 600, gitignored). Patients without recent readings are shown as **Not assessed**. Developer tools are described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Run on localhost (development)
 

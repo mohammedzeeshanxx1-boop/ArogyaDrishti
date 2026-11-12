@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
 from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -35,7 +36,7 @@ from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
 from .patients import patient_profile, list_patients
-from . import detector, evaluation, monitoring, scale2
+from . import auth, detector, evaluation, monitoring, scale2
 from .risk import VITAL_LABEL, to_celsius
 from .replay import store as replay_store
 from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
@@ -56,6 +57,11 @@ def _now() -> str:
 
 def fhir_error(status: int, code: str, diagnostics: str, expression: str | None = None) -> JSONResponse:
     return JSONResponse(outcome([outcome_issue("error", code, diagnostics, expression)]), status_code=status, media_type=FHIR_JSON)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=200)
 
 
 class StartRequest(BaseModel):
@@ -112,15 +118,19 @@ def create_app(
     simulator_in_process: bool = False,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
+    internal_token = secrets.token_urlsafe(32)   # lets the in-process simulator post observations; never leaves this process
+    throttle = auth.LoginThrottle()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         init_db(settings.sqlite_path)
+        auth.init(settings.sqlite_path)
         app.state.fhir = FhirClient(settings.fhir_base_url, settings.fhir_request_timeout_seconds, fhir_transport)
         # The simulator posts to the real ingestion endpoint over HTTP (or in-process ASGI in tests).
         sim_transport = httpx.ASGITransport(app=app) if simulator_in_process else None
         base = "http://in-process" if simulator_in_process else settings.simulator_api_url
-        app.state.sim_client = httpx.AsyncClient(base_url=base, transport=sim_transport, timeout=60)
+        app.state.sim_client = httpx.AsyncClient(base_url=base, transport=sim_transport, timeout=60,
+                                                 headers={auth.INTERNAL_HEADER: internal_token})
         app.state.simulator = Simulator(app.state.sim_client)
         app.state.windows = {}  # patientId -> {"since": UTC Z, "session": replay session id or None}
         monitoring.init(settings.sqlite_path)
@@ -142,7 +152,9 @@ def create_app(
         await app.state.fhir.aclose()
 
     app = FastAPI(title=f"{BRAND_NAME} API", version=__version__, lifespan=lifespan)
-    app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins), allow_methods=["*"], allow_headers=["*"],
+                       allow_credentials=True)
+    app.add_middleware(auth.AuthMiddleware, db_path=settings.sqlite_path, internal_token=internal_token, enabled=settings.auth_required)
 
     @app.exception_handler(FhirUnavailable)
     async def _fhir_down(_: Request, exc: FhirUnavailable) -> JSONResponse:
@@ -154,6 +166,38 @@ def create_app(
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok"}
+
+    # ------------------------------------------------------------ authentication
+    @app.post("/api/auth/login")
+    async def login(body: LoginRequest):
+        username = body.username.strip().lower()
+        if throttle.blocked(username):
+            return fhir_error(429, "throttled", "Too many failed sign-in attempts. Try again in a few minutes.")
+        user = await asyncio.to_thread(auth.authenticate, settings.sqlite_path, username, body.password)
+        if user is None:
+            throttle.fail(username)
+            return fhir_error(401, "login", "Incorrect username or password.")
+        throttle.clear(username)
+        token = auth.create_session(settings.sqlite_path, user["username"])
+        resp = JSONResponse({"user": user, "authRequired": settings.auth_required})
+        resp.set_cookie(auth.SESSION_COOKIE, token, max_age=auth.SESSION_SECONDS, httponly=True, samesite="strict",
+                        secure=settings.cookie_secure, path="/")
+        return resp
+
+    @app.post("/api/auth/logout")
+    async def logout(request: Request):
+        auth.delete_session(settings.sqlite_path, request.cookies.get(auth.SESSION_COOKIE))
+        resp = JSONResponse({"signedOut": True})
+        resp.delete_cookie(auth.SESSION_COOKIE, path="/")
+        return resp
+
+    @app.get("/api/auth/me")
+    async def me(request: Request):
+        if not settings.auth_required:
+            return {"authRequired": False,
+                    "user": {"username": "local", "role": "doctor", "patientId": None, "displayName": "Local (sign-in disabled)"}}
+        user = auth.session_user(settings.sqlite_path, request.cookies.get(auth.SESSION_COOKIE))
+        return {"authRequired": True, "user": user}   # user is null when not signed in
 
     @app.get("/api/v1/meta")
     async def meta() -> dict:

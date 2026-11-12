@@ -42,6 +42,28 @@ def env_defaults() -> dict:
 
 
 E = env_defaults()
+
+# The API requires sign-in. Use the local doctor account created by scripts/dev/accounts.sh.
+import http.cookiejar
+JAR = http.cookiejar.CookieJar()
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.HTTPCookieProcessor(JAR)))
+
+
+def sign_in() -> None:
+    db = Path(E.get("APP_SQLITE_PATH", ".local/api/app.db"))
+    creds = (db if db.is_absolute() else ROOT / db).resolve().parent / "credentials.json"
+    if not creds.exists():
+        print(f"BLOCKED  sign_in  no {creds}; run scripts/dev/accounts.sh"); return
+    doc = next(x for x in json.loads(creds.read_text())["accounts"] if x["role"] == "doctor")
+    req = urllib.request.Request(f"http://localhost:{E.get('API_PORT', '8000')}/api/auth/login", method="POST",
+                                 data=json.dumps({"username": doc["username"], "password": doc["password"]}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        print(f"signed in as {doc['username']} (HTTP {r.status})")
+
+
+def cookie_header() -> dict:
+    return {"Cookie": "; ".join(f"{c.name}={c.value}" for c in JAR)} if len(JAR) else {}
 API = f"http://localhost:{E.get('API_PORT', '8000')}"
 WEB = f"http://localhost:{E.get('WEB_PORT', '5173')}"
 FHIR = E.get("FHIR_BASE_URL", "http://localhost:8090/baseR4").rstrip("/")
@@ -208,7 +230,7 @@ def websocket(pid):
 
     async def run(url):
         got = []
-        async with websockets.connect(url, open_timeout=10, max_size=None) as ws:
+        async with websockets.connect(url, open_timeout=10, max_size=None, additional_headers=cookie_header()) as ws:
             while len(got) < 2:
                 msg = json.loads(await asyncio.wait_for(ws.recv(), 30))
                 if msg["type"] == "monitor":
@@ -316,6 +338,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--with-tests", action="store_true")
     args = ap.parse_args()
+    sign_in()
     started = datetime.now(timezone.utc)
     print(f"Arogya Drishti acceptance · API {API} · web {WEB} · FHIR {FHIR}\n")
     if not services():

@@ -13,7 +13,13 @@ The patient page has one simulation control, the **Live Simulation** panel (scen
 | All automated tests and the production build | `scripts/check.sh` |
 | FHIR inspection | `GET /api/inspector/observations/{id}` · `GET /api/inspector/ingestions` |
 
-Patient ids: `curl -s http://localhost:8000/api/patients`.
+Patient ids: see `.local/api/credentials.json` (patientId) after `scripts/dev/accounts.sh`.
+
+## Sign-in and authorization
+
+The API requires sign-in (`AUTH_REQUIRED=true` by default; tests build `Settings` directly with it off). `scripts/dev/accounts.sh` creates one `doctor` account and one account per synthetic patient with random passwords (PBKDF2 hashes in SQLite; plain passwords only in `.local/api/credentials.json`, mode 600). `--reset` issues new passwords. Sessions are HttpOnly SameSite=Strict cookies (12 h). An ASGI middleware enforces, for HTTP and WebSocket: public status/meta/auth routes; doctor: all routes; patient: GET of their own `/api/patients/{id}/profile`, `/api/demo/monitor/{id}` and `/ws/monitor/{id}` only; everything else denied. The in-process simulator posts observations with a per-process internal token. `scripts/dev/simulate.sh` and `scripts/acceptance.py` sign in as the local doctor.
+
+Not covered: HAPI FHIR itself (port 8090) has no authentication and must stay bound to localhost; no HTTPS on localhost (set `COOKIE_SECURE=true` behind TLS); no password change UI; failed sign-ins are throttled in memory only.
 
 ## Monitoring workflow (what the dashboard shows)
 
