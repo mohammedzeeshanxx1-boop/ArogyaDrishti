@@ -216,3 +216,19 @@ def test_cohort_matches_synthea_manifest(cohort):
 def test_profile_for_unknown_patient_is_404(api):
     r = api.get("/api/patients/no-such-patient-c1/profile")
     assert r.status_code == 404 and r.json()["resourceType"] == "OperationOutcome"
+
+
+def test_monitor_ignores_future_dated_observations(api, hapi, cohort):
+    """Regression: data written straight to HAPI with a future time must not reach the dashboard or risk engine."""
+    pid = cohort[2]["id"]
+    api.post("/api/demo/reset", json={"patientId": pid})
+    future = example_observation("8867-4", pid, 199, _now() + timedelta(days=1))
+    future["meta"] = {"tag": [dict(INGEST_TAG)]}
+    created = hapi.post("Observation", content=json.dumps(future)).json()
+    try:
+        m = api.get(f"/api/demo/monitor/{pid}").json()
+        ids = {p["observation"] for v in m["vitals"].values() for p in v["series"]}
+        assert f"Observation/{created['id']}" not in ids
+        assert m["risk"]["level"] == "NORMAL" and m["observationCount"] == 0
+    finally:
+        hapi.delete(f"Observation/{created['id']}")

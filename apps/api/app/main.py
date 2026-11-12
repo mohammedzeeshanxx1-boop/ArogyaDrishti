@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -33,10 +34,17 @@ from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
 from .patients import patient_profile, list_patients
-from .risk import VITAL_LABEL, evaluate, to_celsius
+from . import detector, evaluation, scale2
+from .risk import VITAL_LABEL, to_celsius
+from .replay import store as replay_store
+from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
+from .replay.persistence import SESSION_TAG_SYSTEM
+from .replay.scenarios import SCENARIOS as REPLAY_SCENARIOS
 from .simulator import DEFAULT_INTERVAL, DEFAULT_STEPS, SCENARIOS, Simulator
 from .vitals import INGEST_TAG, LOINC, VITALS, validate_observation
 
+MONITOR_LIMIT = 480   # newest Observations per monitor call: 120 per vital, enough for the detector's baseline window;
+                      # stays under HAPI 5.7's 500-result paging cap (full histories use search_by_date)
 FHIR_ID = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
 FHIR_JSON = "application/fhir+json"
 
@@ -60,6 +68,29 @@ class PatientRequest(BaseModel):
     patientId: str
 
 
+class Scale2Request(BaseModel):
+    prescribedBy: str = Field(..., min_length=2, max_length=120)
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
+class EvaluationRequest(BaseModel):
+    patientId: str
+    durationMinutes: int = Field(240, ge=30, le=24 * 60)
+    intervalSeconds: int = Field(60, ge=15, le=600)
+    scenarios: list[str] = ["stable", "deterioration", "artifact", "deterioration_artifact"]
+
+
+class ReplayCreate(BaseModel):
+    patientId: str
+    scenario: str
+    speed: str = "10x"
+    seed: int | None = None
+    durationMinutes: int | None = Field(None, ge=1, le=7 * 24 * 60)
+    intervalSeconds: int | None = Field(None, ge=1, le=3600)
+    anchor: datetime | None = None
+    batchSize: int = Field(200, ge=1, le=1000)
+
+
 def _z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -80,8 +111,11 @@ def create_app(
         base = "http://in-process" if simulator_in_process else settings.simulator_api_url
         app.state.sim_client = httpx.AsyncClient(base_url=base, transport=sim_transport, timeout=60)
         app.state.simulator = Simulator(app.state.sim_client)
-        app.state.windows = {}  # patientId -> monitoring window start (UTC, Z)
+        app.state.windows = {}  # patientId -> {"since": UTC Z, "session": replay session id or None}
+        app.state.replay = ReplayManager(app.state.fhir, settings.sqlite_path,
+                                         legacy_busy=lambda: app.state.simulator.state.running)
         yield
+        await app.state.replay.shutdown()
         await app.state.simulator.stop()
         await app.state.sim_client.aclose()
         await app.state.fhir.aclose()
@@ -183,8 +217,11 @@ def create_app(
             return fhir_error(400, "not-supported", f"scenario must be one of {sorted(SCENARIOS)}")
         if await fhir(request).read("Patient", body.patientId) is None:
             return fhir_error(404, "not-found", f"Patient/{body.patientId} not found")
+        active = request.app.state.replay.active()
+        if active:
+            return fhir_error(409, "conflict", f"replay session {active.id} is {active.state}; stop it first")
         state = await request.app.state.simulator.start(body.patientId, body.scenario, body.steps, body.intervalSeconds)
-        request.app.state.windows[body.patientId] = _z(datetime.fromisoformat(state["startedAt"]))
+        request.app.state.windows[body.patientId] = {"since": _z(datetime.fromisoformat(state["startedAt"])), "session": None}
         return state
 
     @app.post("/api/demo/simulator/stop")
@@ -196,25 +233,28 @@ def create_app(
         if not FHIR_ID.match(body.patientId):
             return fhir_error(400, "invalid", "patientId must be a FHIR id")
         state = await request.app.state.simulator.stop()
-        request.app.state.windows[body.patientId] = _z(datetime.now(timezone.utc))
-        return {"patientId": body.patientId, "windowStart": request.app.state.windows[body.patientId], "simulator": state}
+        request.app.state.windows[body.patientId] = {"since": _z(datetime.now(timezone.utc)), "session": None}
+        return {"patientId": body.patientId, "windowStart": request.app.state.windows[body.patientId]["since"], "simulator": state}
 
     @app.get("/api/demo/monitor/{pid}")
-    async def monitor(pid: str, request: Request):
+    async def monitor(pid: str, request: Request, mode: str = Query("personalized", pattern="^(fixed|personalized)$")):
         """Everything the dashboard shows for one patient, computed from observations stored in HAPI."""
         if not FHIR_ID.match(pid):
             return fhir_error(400, "invalid", "patient id must be a FHIR id")
-        windows = request.app.state.windows
-        window = windows.get(pid) or _z(datetime.now(timezone.utc) - timedelta(minutes=30))
+        view = request.app.state.windows.get(pid) or {"since": _z(datetime.now(timezone.utc) - timedelta(minutes=30)), "session": None}
+        window = view["since"]
         params = {
             "subject": f"Patient/{pid}",
             "code": ",".join(f"{LOINC}|{c}" for c in VITALS),
-            "_tag": f"{INGEST_TAG['system']}|{INGEST_TAG['code']}",
-            "date": f"ge{window}",
-            "_sort": "date",
+            # A replay view shows only that session's Observations (measurement times may overlap other runs).
+            "_tag": f"{SESSION_TAG_SYSTEM}|{view['session']}" if view["session"] else f"{INGEST_TAG['system']}|{INGEST_TAG['code']}",
+            # Never show readings timestamped in the future (they cannot be real measurements;
+            # the ingestion endpoint already rejects them, but HAPI may hold data written by other clients).
+            "date": [f"ge{window}", f"le{_z(datetime.now(timezone.utc) + timedelta(minutes=5))}"],
+            "_sort": "-date",   # newest first, so long sessions show their latest readings
             "_count": 200,
         }
-        stored = await fhir(request).search("Observation", params, limit=2000)
+        stored = await fhir(request).search("Observation", params, limit=MONITOR_LIMIT)
         readings, vitals = [], {k: {"label": l, "unit": u, "series": [], "latest": None} for k, (l, u) in VITAL_LABEL.items()}
         for o in stored:
             code = next((c["code"] for c in o.get("code", {}).get("coding", []) if c.get("system") == LOINC and c.get("code") in VITALS), None)
@@ -241,17 +281,195 @@ def create_app(
                 "hapiUrl": f"{settings.fhir_base_url}/Observation/{latest['id']}",
                 "readBackMatches": ev[0]["read_back_matches"] if ev else None,
                 "hapiValidationErrors": (ev[0].get("hapiValidation") or {}).get("errors") if ev else None,
+                "replay": None,
             }
+            rep = replay_store.event_by_observation(settings.sqlite_path, latest["id"]) if not ev else None
+            if rep:
+                proof["replay"] = {
+                    "sessionId": rep["session_id"], "seq": rep["seq"], "batch": rep["batch_no"],
+                    "persistStatus": rep["persist_status"], "measuredAt": rep["measured_at"], "ingestedAt": rep["ingested_at"],
+                    "validation": "local strict validation" + ("; HAPI $validate (first of this vital in the session)" if rep["hapi_shape_validated"] else
+                                                              "; HAPI $validate done once per vital per session"),
+                }
+        s2 = await scale2.status(fhir(request), pid)
         sim = request.app.state.simulator.state.public()
+        rs = request.app.state.replay.get(view["session"]) if view["session"] else None
         return {
+            "replay": rs.public() if rs else None,
             "patientId": pid,
             "windowStart": window,
             "evaluatedAt": _now(),
             "observationCount": len(readings),
+            "truncated": len(stored) >= MONITOR_LIMIT,
             "vitals": vitals,
-            "risk": evaluate(readings),
+            "risk": detector.evaluate(readings, mode=mode, scale2=s2["eligible"]),
+            "scale2": s2,
             "fhirProof": proof,
             "simulator": sim if sim["patientId"] == pid else None,
+        }
+
+    # ------------------------------------------------------------ SpO2 Scale 2 (FHIR Flag)
+    @app.get("/api/patients/{pid}/scale2")
+    async def scale2_get(pid: str, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        return await scale2.status(fhir(request), pid)
+
+    @app.post("/api/patients/{pid}/scale2")
+    async def scale2_set(pid: str, body: Scale2Request, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        if await fhir(request).read("Patient", pid) is None:
+            return fhir_error(404, "not-found", f"Patient/{pid} not found")
+        try:
+            return await scale2.set_flag(fhir(request), pid, body.prescribedBy, body.reason)
+        except ValueError as exc:
+            return fhir_error(502, "exception", str(exc))
+
+    @app.delete("/api/patients/{pid}/scale2")
+    async def scale2_clear(pid: str, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        return await scale2.clear_flag(fhir(request), pid)
+
+    # ------------------------------------------------------------ evaluation
+    @app.post("/api/evaluation/run")
+    async def evaluation_run(body: EvaluationRequest, request: Request):
+        """Replay each scenario in batch mode, then evaluate fixed vs personalized on what HAPI stored."""
+        mgr = request.app.state.replay
+        if mgr.active():
+            return fhir_error(409, "conflict", "a replay session is active; stop it first")
+        if await fhir(request).read("Patient", body.patientId) is None:
+            return fhir_error(404, "not-found", f"Patient/{body.patientId} not found")
+        # Evaluation data is anchored 3 days back so it never overlaps live monitoring windows.
+        anchor = (datetime.now(timezone.utc) - timedelta(days=3, minutes=body.durationMinutes)).replace(second=0, microsecond=0)
+        s2 = (await scale2.status(fhir(request), body.patientId))["eligible"]
+        results = []
+        for sc in body.scenarios:
+            try:
+                s = await mgr.create(body.patientId, sc, None, anchor, body.durationMinutes, body.intervalSeconds, "batch", 400)
+            except ValueError as exc:
+                return _replay_error(exc)
+            await mgr.start(s.id)
+            await s.wait()
+            if s.state != "completed":
+                return fhir_error(502, "exception", f"replay of {sc} did not complete: {s.last_error}")
+            try:
+                result = await evaluation.evaluate_session(fhir(request), settings.sqlite_path, s.id, s2)
+            except RuntimeError as exc:
+                return fhir_error(502, "incomplete", str(exc))
+            results.append({"scenario": sc, "scenarioName": REPLAY_SCENARIOS[sc].name, "seed": s.params["seed"],
+                            "fingerprint": s.fingerprint, **result})
+        report = {
+            "generatedAt": _now(), "patientId": body.patientId, "durationMinutes": body.durationMinutes,
+            "intervalSeconds": body.intervalSeconds, "spo2Scale": 2 if s2 else 1, "dataSource": "simulated (seeded scenarios)",
+            "detectorLabel": detector.LABEL, "definitions": evaluation.__doc__, "scenarios": results,
+        }
+        out = Path(settings.sqlite_path).parent / "reports"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "evaluation-latest.json").write_text(json.dumps(report, indent=2, default=str))
+        request.app.state.latest_report = report
+        return JSONResponse(json.loads(json.dumps(report, default=str)))
+
+    @app.get("/api/evaluation/latest")
+    async def evaluation_latest(request: Request):
+        rep = getattr(request.app.state, "latest_report", None)
+        if rep is None:
+            p = Path(settings.sqlite_path).parent / "reports" / "evaluation-latest.json"
+            if not p.exists():
+                return fhir_error(404, "not-found", "no evaluation has been run yet")
+            return JSONResponse(json.loads(p.read_text()))
+        return JSONResponse(json.loads(json.dumps(rep, default=str)))
+
+    # ------------------------------------------------------------ replay engine
+    def _replay_error(exc: Exception) -> JSONResponse:
+        if isinstance(exc, ReplayConflict):
+            return fhir_error(409, "conflict", str(exc))
+        if isinstance(exc, KeyError):
+            return fhir_error(404, "not-found", f"replay session {exc.args[0]} not found")
+        return fhir_error(400, "invalid", str(exc))
+
+    def _show(request: Request, s) -> dict:
+        request.app.state.windows[s.patient_id] = {"since": _z(s.anchor), "session": s.id}
+        return s.public()
+
+    @app.get("/api/replay/scenarios")
+    async def replay_scenarios() -> dict:
+        return {"scenarios": [s.public() for s in REPLAY_SCENARIOS.values()], "speeds": list(SPEEDS)}
+
+    @app.get("/api/replay/sessions")
+    async def replay_sessions(request: Request) -> dict:
+        mgr = request.app.state.replay
+        active = mgr.active()
+        return {"active": active.id if active else None, "sessions": [s.public() for s in mgr.sessions.values()]}
+
+    @app.post("/api/replay/sessions", status_code=201)
+    async def replay_create(body: ReplayCreate, request: Request):
+        if not FHIR_ID.match(body.patientId):
+            return fhir_error(400, "invalid", "patientId must be a FHIR id")
+        if body.speed not in SPEEDS:
+            return fhir_error(400, "invalid", f"speed must be one of {list(SPEEDS)}")
+        if await fhir(request).read("Patient", body.patientId) is None:
+            return fhir_error(404, "not-found", f"Patient/{body.patientId} not found")
+        anchor = body.anchor.astimezone(timezone.utc) if body.anchor else None
+        try:
+            s = await request.app.state.replay.create(body.patientId, body.scenario, body.seed, anchor,
+                                                      body.durationMinutes, body.intervalSeconds, body.speed, body.batchSize)
+        except ValueError as exc:
+            return _replay_error(exc)
+        last = s.events[-1].measured_at if s.events else s.anchor
+        if last > datetime.now(timezone.utc) + timedelta(minutes=5):
+            return fhir_error(400, "invalid", "anchor + duration ends in the future; measurement times must not be in the future")
+        return _show(request, s)
+
+    @app.get("/api/replay/sessions/{sid}")
+    async def replay_get(sid: str, request: Request):
+        s = request.app.state.replay.get(sid)
+        return s.public() if s else _replay_error(KeyError(sid))
+
+    @app.post("/api/replay/sessions/{sid}/{action}")
+    async def replay_action(sid: str, action: str, request: Request, wait: bool = False):
+        mgr = request.app.state.replay
+        try:
+            if action == "start":
+                s = await mgr.start(sid)
+                if wait:
+                    await s.wait()
+            elif action == "reset":
+                s = await mgr.reset(sid)
+            elif action in ("pause", "resume", "stop"):
+                s = mgr._require(sid)
+                if action == "resume" and s.state == "error":
+                    other = mgr.active()
+                    if other and other.id != s.id:
+                        raise ReplayConflict(f"replay session {other.id} is {other.state}; stop it first")
+                await getattr(s, action)()
+                if action == "resume" and wait:
+                    await s.wait()
+            else:
+                return fhir_error(404, "not-found", f"unknown action {action!r}")
+        except (ReplayConflict, KeyError, ValueError) as exc:
+            return _replay_error(exc)
+        return _show(request, s)
+
+    @app.get("/api/replay/sessions/{sid}/persistence")
+    async def replay_persistence(sid: str, request: Request):
+        """What HAPI has confirmed for this session, cross-checked against HAPI itself."""
+        s = request.app.state.replay.get(sid)
+        if s is None:
+            return _replay_error(KeyError(sid))
+        hapi_count = await fhir(request).count("Observation", {"_tag": f"{SESSION_TAG_SYSTEM}|{sid}"})
+        events = replay_store.event_rows(settings.sqlite_path, sid)
+        return {
+            "sessionId": sid,
+            "eventsTotal": len(s.events),
+            "confirmedByHapi": s.created + s.existing,
+            "hapiCountForSessionTag": hapi_count,
+            # consistent: HAPI, the engine and the event log agree; complete: every event is confirmed
+            "consistent": hapi_count == s.created + s.existing == len(events),
+            "complete": s.created + s.existing == len(s.events) and hapi_count == len(s.events),
+            "batches": replay_store.batch_rows(settings.sqlite_path, sid),
+            "sample": events[:3] + events[-1:] if events else [],
         }
 
     # ------------------------------------------------------------ inspector

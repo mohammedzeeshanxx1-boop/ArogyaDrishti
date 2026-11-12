@@ -31,6 +31,51 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## P0 features: NEWS2-style scoring, Scale 2, Sensor Trust Engine, baselines, evaluation (2026-11-12)
+
+| Feature | Status | Evidence |
+|---|---|---|
+| NEWS2-style scoring (RR, SpO2, pulse, temperature) | PASS (partial and labelled) | `detector.py`; boundary tests for every band. 4 of 7 parameters; BP, air/oxygen and consciousness not measured. Bands transcribed from RCP 2017; **verification against the chart PDF is BLOCKED** (PDF not in repo) |
+| SpO2 Scale 2 eligibility | PASS | Only with an active, attributed FHIR `Flag` in HAPI (live: set → Flag/25424, scale 2; cleared → scale 1). A diagnosis alone never switches the scale (test) |
+| Sensor Trust Engine | PASS | Probe-off zeros, implausible values, isolated spikes, unconfirmed jumps held for one reading; suppressed readings stay in HAPI and are listed with reasons (tests) |
+| Personalized rolling baselines (2 rules) | PASS | Rule 1 deviation ≥ max(4·MAD, minimum Δ) from own median → WATCH; rule 2 chronic-baseline tolerance for single score-1 parameters; safety floor: a score of 3 or aggregate ≥5 is never tolerated (tests). The cohort's Synthea history is too sparse, so baselines come from monitoring data with a 20-reading warm-up |
+| Explainable live alerts | PASS | Each alert has level, rule (bands), value, unit, Observation id(s), reason; baseline alerts include median, MAD and window. Dashboard shows the NEWS2 breakdown, Scale badge, suppressed artifacts and a fixed vs personalized toggle |
+| Scenario comparison and 5 metrics | PASS (simulated data) | `POST /api/evaluation/run`; results in EVALUATION.md, computed from HAPI read-back. Incomplete data is refused (guard) |
+| Real BIDMC replay | **BLOCKED** | No BIDMC files in `services/bidmc/`; PhysioNet unreachable from this workspace |
+| Mobile overflow | PASS | Browser at 390 px: scroll width 390 (was 663), 0 console errors |
+| Regression | PASS | `scripts/check.sh`: 114 unit, 28 live HAPI, 28 repo, 4 web, build: ALL CHECKS PASSED (174 tests) |
+
+Defects found and fixed during this work:
+- HAPI 5.7 stops following search pages at 500 results and caps page size at 50. The first evaluation silently used 500 of 964 Observations; those results were discarded. Fixed with a date-cursor fetch and a guard that refuses incomplete data.
+- HAPI rejects two upper date bounds; the cursor now replaces the existing bound.
+- The monitor took 29 s on long sessions; it now reads the newest 480 readings (about 4 s).
+- Evaluation sessions now sit 3 days in the past so they never mix into live views.
+
+Known limitations: monitor about 4 s for long sessions; monitoring window and replay sessions are in memory (lost on API restart); one detector process; Synthea history vs simulated counts not split in the profile.
+
+---
+
+## PHASE 1: deterministic replay engine (2026-11-12)
+
+| # | Checkpoint | Status | Evidence |
+|---|---|---|---|
+| C1 | Existing MVP still works | PASS | Browser: stable NORMAL throughout; deterioration WATCH 15 s → REVIEW 21 s → URGENT 27 s; HAPI read-back Observation/23860 |
+| C2 | Replay controls | PASS | Unit lifecycle test; browser 10×: 8/124 → paused (held at 8 for 5 s) → resumed 12/124 → stopped 16/124 → reset CREATED 0/124 |
+| C3 | Same seed → same observations | PASS | Unit fingerprint tests; live: reset session re-read from HAPI identical to original (values, LOINC, UCUM, times, subject) |
+| C4 | Accelerated replay | PASS | Unit 1×/5×/10× clock tests; live 10× run of 4 simulated min completed in the expected wall time with pause held |
+| C5 | Batch without real-time wait | PASS | 24 simulated h (5,764 Observations) in 55 s, HAPI tag count 5,764, 15/15 batches confirmed; 2 h batch completed in 3.0 s |
+| C6 | Persisted resources read back | PASS | Live: 244 Observations read from HAPI match generated events; `/persistence` consistent and complete |
+| C7 | No ground-truth leakage | PASS | Ground truth only in SQLite `replay_ground_truth`; tests: event fields, FHIR payload scan, `risk.py` import check, API never calls `ground_truth()` |
+| C8 | Tests and build | PASS | `scripts/check.sh`: 95 unit, 28 live HAPI, 28 repo, 4 web, build: ALL CHECKS PASSED (155 tests) |
+
+Also: idempotent retries via conditional create (lost-response test: 0 duplicates); HAPI-down recovery (error state, cursor kept, resume completes).
+
+Incident fixed: about 600 benchmark Observations written straight to HAPI (bypassing validation; future-dated values of 70) polluted the live demo view. They were deleted by their `bench-` identifier, and the monitor now ignores future-dated readings (regression test added).
+
+Design: docs/REPLAY_SCHEMA.md. Not done: Synthea-history vs simulated count split in profile; BIDMC source (blocked, B4).
+
+---
+
 ## ROUND 1 MVP: end-to-end demo prototype (2026-11-12)
 
 **Scope: a working demonstration for the Round 1 evaluation. This is NOT completion of Phases 2–6.** It adds a minimal simulator, a prototype risk engine and a dashboard on top of the verified Phase 1 FHIR work. Not built: BIDMC replay, NEWS2 baseline, personalization rules, the Sensor Trust Engine / artifact suppression, Watch/Review/Urgent alert lifecycle beyond the live view, Replay Lab, comparative report, and the Judge Evidence Console.

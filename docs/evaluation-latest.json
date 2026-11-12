@@ -1,0 +1,442 @@
+{
+  "generatedAt": "2026-11-12T13:23:14.014381+00:00",
+  "patientId": "88967114-c92a-2b59-06ff-a60a2c76e10a",
+  "durationMinutes": 240,
+  "intervalSeconds": 60,
+  "spo2Scale": 1,
+  "dataSource": "simulated (seeded scenarios)",
+  "detectorLabel": "NEWS2-style score (partial: 4 of 7 parameters; RCP 2017 bands transcribed, not yet verified against the chart PDF) + Sensor Trust Engine + personalized baselines. Decision support prototype, not clinically validated.",
+  "definitions": "Scenario replay evaluation: fixed thresholds vs personalized detection.\n\nFor every replay session:\n  1. read the session's Observations back FROM HAPI (the detector never sees anything else)\n  2. replay them causally: at each measurement time, run the detector on readings up to that time\n  3. turn the level timeline into alert episodes\n  4. only then join with ground truth (evaluation-only) to compute metrics\n\nMetrics (definitions are fixed here; nothing is hand-entered):\n  * detection lead time: scripted \"critical\" time minus first REVIEW+ episode start after onset\n    (positive = alerted before the scripted critical point); also onset-to-first-WATCH delay\n  * alerts per patient-day: alert episodes (level >= WATCH) per 24 h of monitored time\n  * false alert episodes: episodes starting inside a ground-truth \"stable\" or \"artifact\" window\n  * FHIR compliance: Observations confirmed by HAPI / events, plus a live HAPI $validate of one\n    stored Observation per vital\n  * explainability: share of alerts (at episode starts) with level, rule, value, unit, reason and a\n    triggering Observation id that exists among the session's stored Observations\n",
+  "scenarios": [
+    {
+      "scenario": "stable",
+      "scenarioName": "Stable Recovery",
+      "seed": 1001,
+      "fingerprint": "aee59ecfebfe63ac5e1fca86a559ce2795528239eb38f98659b7490a44264be4",
+      "sessionId": "745d0b46751a4caa",
+      "observations": 964,
+      "groundTruth": [
+        {
+          "label": "stable",
+          "start_at": "2026-11-09T09:22:00+00:00",
+          "end_at": "2026-11-09T13:22:00+00:00",
+          "detail": "no deterioration scripted"
+        }
+      ],
+      "modes": {
+        "fixed": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 0,
+          "alertsPerPatientDay": 0.0,
+          "falseAlertEpisodes": 0,
+          "artifactAlertEpisodes": 0,
+          "onsetToFirstWatchMin": null,
+          "leadTimeBeforeCriticalMin": null,
+          "detectedBeforeCritical": null,
+          "explainedAlerts": 0,
+          "alertsAtEpisodeStarts": 0,
+          "explainabilityPct": null,
+          "peakLevel": "NORMAL",
+          "suppressedReadings": 0
+        },
+        "personalized": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 0,
+          "alertsPerPatientDay": 0.0,
+          "falseAlertEpisodes": 0,
+          "artifactAlertEpisodes": 0,
+          "onsetToFirstWatchMin": null,
+          "leadTimeBeforeCriticalMin": null,
+          "detectedBeforeCritical": null,
+          "explainedAlerts": 0,
+          "alertsAtEpisodeStarts": 0,
+          "explainabilityPct": null,
+          "peakLevel": "NORMAL",
+          "suppressedReadings": 0
+        }
+      },
+      "fhirCompliance": {
+        "events": 964,
+        "confirmedByHapi": 964,
+        "storedInHapi": 964,
+        "confirmedPct": 100.0,
+        "hapiValidateSample": [
+          {
+            "observation": "Observation/35065",
+            "profile": "http://hl7.org/fhir/StructureDefinition/heartrate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/35066",
+            "profile": "http://hl7.org/fhir/StructureDefinition/oxygensat",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/35067",
+            "profile": "http://hl7.org/fhir/StructureDefinition/resprate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/35068",
+            "profile": "http://hl7.org/fhir/StructureDefinition/bodytemp",
+            "errors": 0,
+            "warnings": 2
+          }
+        ],
+        "sampleErrors": 0,
+        "validationCoverage": "every Observation: strict local validator; HAPI $validate: one per vital at ingest + one per vital re-checked here"
+      }
+    },
+    {
+      "scenario": "deterioration",
+      "scenarioName": "Gradual Deterioration",
+      "seed": 2002,
+      "fingerprint": "2e5c0de2a99bec311dd23b506c676dc309dcee02a3c348e47c97219aeb279429",
+      "sessionId": "d9f7d7653fe34d33",
+      "observations": 964,
+      "groundTruth": [
+        {
+          "label": "stable",
+          "start_at": "2026-11-09T09:22:00+00:00",
+          "end_at": "2026-11-09T10:46:00+00:00",
+          "detail": "pre-onset"
+        },
+        {
+          "label": "deterioration_onset",
+          "start_at": "2026-11-09T10:46:00+00:00",
+          "end_at": "2026-11-09T13:22:00+00:00",
+          "detail": "progressive ramp, shape 1.4"
+        },
+        {
+          "label": "critical",
+          "start_at": "2026-11-09T12:43:00+00:00",
+          "end_at": "2026-11-09T13:22:00+00:00",
+          "detail": "scripted curve reaches >=2 of SpO2<=91, pulse>=131, RR>=25"
+        }
+      ],
+      "modes": {
+        "fixed": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 2,
+          "alertsPerPatientDay": 12.0,
+          "falseAlertEpisodes": 0,
+          "artifactAlertEpisodes": 0,
+          "onsetToFirstWatchMin": 32.0,
+          "leadTimeBeforeCriticalMin": 43.0,
+          "detectedBeforeCritical": true,
+          "explainedAlerts": 4,
+          "alertsAtEpisodeStarts": 4,
+          "explainabilityPct": 100.0,
+          "peakLevel": "URGENT",
+          "suppressedReadings": 0
+        },
+        "personalized": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 2,
+          "alertsPerPatientDay": 12.0,
+          "falseAlertEpisodes": 0,
+          "artifactAlertEpisodes": 0,
+          "onsetToFirstWatchMin": 32.0,
+          "leadTimeBeforeCriticalMin": 43.0,
+          "detectedBeforeCritical": true,
+          "explainedAlerts": 4,
+          "alertsAtEpisodeStarts": 4,
+          "explainabilityPct": 100.0,
+          "peakLevel": "URGENT",
+          "suppressedReadings": 0
+        }
+      },
+      "fhirCompliance": {
+        "events": 964,
+        "confirmedByHapi": 964,
+        "storedInHapi": 964,
+        "confirmedPct": 100.0,
+        "hapiValidateSample": [
+          {
+            "observation": "Observation/36029",
+            "profile": "http://hl7.org/fhir/StructureDefinition/heartrate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/36030",
+            "profile": "http://hl7.org/fhir/StructureDefinition/oxygensat",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/36031",
+            "profile": "http://hl7.org/fhir/StructureDefinition/resprate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/36032",
+            "profile": "http://hl7.org/fhir/StructureDefinition/bodytemp",
+            "errors": 0,
+            "warnings": 2
+          }
+        ],
+        "sampleErrors": 0,
+        "validationCoverage": "every Observation: strict local validator; HAPI $validate: one per vital at ingest + one per vital re-checked here"
+      }
+    },
+    {
+      "scenario": "artifact",
+      "scenarioName": "Stable with Sensor Artifacts",
+      "seed": 3003,
+      "fingerprint": "02265fd1b1fd87b81335fe047afb0bbb9d788ad51edb73dd475cf8351bae4044",
+      "sessionId": "91151ca3ee6a4ba4",
+      "observations": 964,
+      "groundTruth": [
+        {
+          "label": "stable",
+          "start_at": "2026-11-09T09:22:00+00:00",
+          "end_at": "2026-11-09T13:22:00+00:00",
+          "detail": "no deterioration scripted"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T09:58:00+00:00",
+          "end_at": "2026-11-09T09:59:00+00:00",
+          "detail": "spike on heart_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T10:34:00+00:00",
+          "end_at": "2026-11-09T10:37:00+00:00",
+          "detail": "zero on spo2"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T10:34:00+00:00",
+          "end_at": "2026-11-09T10:37:00+00:00",
+          "detail": "zero on heart_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T11:10:00+00:00",
+          "end_at": "2026-11-09T11:11:00+00:00",
+          "detail": "spike on spo2"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T11:46:00+00:00",
+          "end_at": "2026-11-09T11:47:00+00:00",
+          "detail": "spike on respiratory_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T12:22:00+00:00",
+          "end_at": "2026-11-09T12:23:00+00:00",
+          "detail": "spike on heart_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T12:58:00+00:00",
+          "end_at": "2026-11-09T12:59:00+00:00",
+          "detail": "spike on body_temperature"
+        }
+      ],
+      "modes": {
+        "fixed": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 6,
+          "alertsPerPatientDay": 36.0,
+          "falseAlertEpisodes": 6,
+          "artifactAlertEpisodes": 6,
+          "onsetToFirstWatchMin": null,
+          "leadTimeBeforeCriticalMin": null,
+          "detectedBeforeCritical": null,
+          "explainedAlerts": 13,
+          "alertsAtEpisodeStarts": 13,
+          "explainabilityPct": 100.0,
+          "peakLevel": "REVIEW",
+          "suppressedReadings": 0
+        },
+        "personalized": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 0,
+          "alertsPerPatientDay": 0.0,
+          "falseAlertEpisodes": 0,
+          "artifactAlertEpisodes": 0,
+          "onsetToFirstWatchMin": null,
+          "leadTimeBeforeCriticalMin": null,
+          "detectedBeforeCritical": null,
+          "explainedAlerts": 0,
+          "alertsAtEpisodeStarts": 0,
+          "explainabilityPct": null,
+          "peakLevel": "NORMAL",
+          "suppressedReadings": 3
+        }
+      },
+      "fhirCompliance": {
+        "events": 964,
+        "confirmedByHapi": 964,
+        "storedInHapi": 964,
+        "confirmedPct": 100.0,
+        "hapiValidateSample": [
+          {
+            "observation": "Observation/36993",
+            "profile": "http://hl7.org/fhir/StructureDefinition/heartrate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/36994",
+            "profile": "http://hl7.org/fhir/StructureDefinition/oxygensat",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/36995",
+            "profile": "http://hl7.org/fhir/StructureDefinition/resprate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/36996",
+            "profile": "http://hl7.org/fhir/StructureDefinition/bodytemp",
+            "errors": 0,
+            "warnings": 2
+          }
+        ],
+        "sampleErrors": 0,
+        "validationCoverage": "every Observation: strict local validator; HAPI $validate: one per vital at ingest + one per vital re-checked here"
+      }
+    },
+    {
+      "scenario": "deterioration_artifact",
+      "scenarioName": "Deterioration with Sensor Artifacts",
+      "seed": 4004,
+      "fingerprint": "24bd520d6ef035f4485483997c78eef66b1aeb9dfa9e280ad0e585171ed97347",
+      "sessionId": "2c1a162ac84b4e92",
+      "observations": 964,
+      "groundTruth": [
+        {
+          "label": "stable",
+          "start_at": "2026-11-09T09:22:00+00:00",
+          "end_at": "2026-11-09T10:46:00+00:00",
+          "detail": "pre-onset"
+        },
+        {
+          "label": "deterioration_onset",
+          "start_at": "2026-11-09T10:46:00+00:00",
+          "end_at": "2026-11-09T13:22:00+00:00",
+          "detail": "progressive ramp, shape 1.4"
+        },
+        {
+          "label": "critical",
+          "start_at": "2026-11-09T12:43:00+00:00",
+          "end_at": "2026-11-09T13:22:00+00:00",
+          "detail": "scripted curve reaches >=2 of SpO2<=91, pulse>=131, RR>=25"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T09:58:00+00:00",
+          "end_at": "2026-11-09T09:59:00+00:00",
+          "detail": "spike on heart_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T10:34:00+00:00",
+          "end_at": "2026-11-09T10:37:00+00:00",
+          "detail": "zero on spo2"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T10:34:00+00:00",
+          "end_at": "2026-11-09T10:37:00+00:00",
+          "detail": "zero on heart_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T11:10:00+00:00",
+          "end_at": "2026-11-09T11:11:00+00:00",
+          "detail": "spike on spo2"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T11:46:00+00:00",
+          "end_at": "2026-11-09T11:47:00+00:00",
+          "detail": "spike on respiratory_rate"
+        },
+        {
+          "label": "artifact",
+          "start_at": "2026-11-09T12:22:00+00:00",
+          "end_at": "2026-11-09T12:23:00+00:00",
+          "detail": "spike on heart_rate"
+        }
+      ],
+      "modes": {
+        "fixed": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 8,
+          "alertsPerPatientDay": 48.0,
+          "falseAlertEpisodes": 2,
+          "artifactAlertEpisodes": 2,
+          "onsetToFirstWatchMin": 24.0,
+          "leadTimeBeforeCriticalMin": 93.0,
+          "detectedBeforeCritical": true,
+          "explainedAlerts": 17,
+          "alertsAtEpisodeStarts": 17,
+          "explainabilityPct": 100.0,
+          "peakLevel": "URGENT",
+          "suppressedReadings": 0
+        },
+        "personalized": {
+          "monitoredDays": 0.1667,
+          "alertEpisodes": 5,
+          "alertsPerPatientDay": 30.0,
+          "falseAlertEpisodes": 0,
+          "artifactAlertEpisodes": 0,
+          "onsetToFirstWatchMin": 31.0,
+          "leadTimeBeforeCriticalMin": 46.0,
+          "detectedBeforeCritical": true,
+          "explainedAlerts": 10,
+          "alertsAtEpisodeStarts": 10,
+          "explainabilityPct": 100.0,
+          "peakLevel": "URGENT",
+          "suppressedReadings": 2
+        }
+      },
+      "fhirCompliance": {
+        "events": 964,
+        "confirmedByHapi": 964,
+        "storedInHapi": 964,
+        "confirmedPct": 100.0,
+        "hapiValidateSample": [
+          {
+            "observation": "Observation/37957",
+            "profile": "http://hl7.org/fhir/StructureDefinition/heartrate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/37958",
+            "profile": "http://hl7.org/fhir/StructureDefinition/oxygensat",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/37959",
+            "profile": "http://hl7.org/fhir/StructureDefinition/resprate",
+            "errors": 0,
+            "warnings": 2
+          },
+          {
+            "observation": "Observation/37960",
+            "profile": "http://hl7.org/fhir/StructureDefinition/bodytemp",
+            "errors": 0,
+            "warnings": 2
+          }
+        ],
+        "sampleErrors": 0,
+        "validationCoverage": "every Observation: strict local validator; HAPI $validate: one per vital at ingest + one per vital re-checked here"
+      }
+    }
+  ]
+}

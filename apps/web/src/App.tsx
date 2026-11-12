@@ -9,10 +9,19 @@ import {
   resetDemo,
   startScenario,
   stopScenario,
+  clearScale2,
+  createReplay,
+  fetchLatestEvaluation,
+  runEvaluation,
+  setScale2,
+  type DetectorMode,
+  type EvaluationReport,
+  replayAction,
   type Alert,
   type Monitor,
   type PatientProfile,
   type PatientSummary,
+  type ReplaySpeed,
   type RiskLevel,
   type StatusResponse,
   type VitalKey,
@@ -66,6 +75,158 @@ function FhirPill({ status }: { status: StatusResponse | null | "down" }) {
   );
 }
 
+function ReplayPanel({ patientId, monitor, onAction, busy }: {
+  patientId: string | null;
+  monitor: Monitor | null;
+  onAction: (fn: () => Promise<unknown>) => Promise<void>;
+  busy: boolean;
+}) {
+  const [scenario, setScenario] = useState("deterioration");
+  const [speed, setSpeed] = useState<ReplaySpeed>("10x");
+  const [duration, setDuration] = useState(120);
+  const r = monitor?.replay ?? null;
+  const st = r?.state;
+  // Any non-active session (created, stopped, completed, error) can be replaced by a new one.
+  const canStart = !!patientId && !(st === "running" || st === "paused");
+  const btn = "rounded-lg px-3 py-1.5 text-sm font-semibold disabled:opacity-40";
+  return (
+    <Card title="Replay engine (simulated time)" right={<span className="text-[11px] text-navy-500">deterministic · seeded</span>}>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-navy-500">Scenario
+          <select aria-label="Replay scenario" value={scenario} onChange={(e) => setScenario(e.target.value)} className="mt-0.5 block rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-navy-900">
+            <option value="stable">Stable Recovery</option>
+            <option value="deterioration">Gradual Deterioration</option>
+          </select>
+        </label>
+        <label className="text-xs text-navy-500">Duration
+          <select aria-label="Replay duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))} className="mt-0.5 block rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-navy-900">
+            <option value={30}>30 min</option>
+            <option value={120}>2 h</option>
+            <option value={1440}>24 h</option>
+          </select>
+        </label>
+        <label className="text-xs text-navy-500">Speed
+          <select aria-label="Replay speed" value={speed} onChange={(e) => setSpeed(e.target.value as ReplaySpeed)} className="mt-0.5 block rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-navy-900">
+            <option value="1x">1×</option>
+            <option value="5x">5×</option>
+            <option value="10x">10×</option>
+            <option value="batch">Batch (no waiting)</option>
+          </select>
+        </label>
+        <button type="button" aria-label="Start replay" disabled={!canStart || busy} className={`${btn} bg-teal-700 text-white hover:bg-teal-600`}
+          onClick={() => onAction(async () => {
+            const s = await createReplay({ patientId: patientId!, scenario, speed, durationMinutes: duration });
+            await replayAction(s.sessionId, "start");
+          })}>▶ Start</button>
+        <button type="button" aria-label="Start reset session" disabled={!r || st !== "created" || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "start"))}>Start reset session</button>
+        <button type="button" aria-label="Pause replay" disabled={st !== "running" || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "pause"))}>❚❚ Pause</button>
+        <button type="button" aria-label="Resume replay" disabled={!(st === "paused" || st === "error") || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "resume"))}>▶ Resume</button>
+        <button type="button" aria-label="Stop replay" disabled={!(st === "running" || st === "paused") || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "stop"))}>■ Stop</button>
+        <button type="button" aria-label="Reset replay" disabled={!r || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "reset"))}>↺ Reset</button>
+      </div>
+      {r ? (
+        <div className="mt-3 text-xs text-navy-700" aria-live="polite" data-testid="replay-status">
+          <div className="flex flex-wrap justify-between gap-2">
+            <span><strong>{r.scenarioName}</strong> · seed {r.seed} · {r.speed} · <span data-testid="replay-state" className="font-semibold uppercase">{r.state}</span></span>
+            <span>simulated time {new Date(r.simulatedNow).toLocaleString()}</span>
+          </div>
+          <div className="mt-1 h-2 rounded-full bg-slate-100">
+            <div className="h-2 rounded-full bg-teal-600 transition-all" style={{ width: `${Math.round(100 * r.progress)}%` }} />
+          </div>
+          <p className="mt-1">
+            {r.persisted}/{r.eventsTotal} observations confirmed by HAPI · {r.batches} batches{r.failedBatches ? ` · ${r.failedBatches} failed (retry with Resume)` : ""}
+            {r.existing ? ` · ${r.existing} already stored (idempotent retry)` : ""}
+          </p>
+          {r.lastError && <p className="mt-1 rounded bg-red-50 p-2 text-red-800">{r.lastError}</p>}
+          <p className="mt-1 text-[11px] text-navy-500">Session {r.sessionId}{r.resetFrom ? ` (reset of ${r.resetFrom})` : ""} · fingerprint {r.fingerprint.slice(0, 12)}…</p>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-navy-500">Replays seeded scenarios on a simulated clock and stores every reading in HAPI in batches. Measurement times are in the past; ingestion time is recorded separately.</p>
+      )}
+    </Card>
+  );
+}
+
+function Scale2Card({ patientId, status, onAction, busy }: { patientId: string | null; status: import("./api").Scale2Status | null; onAction: (fn: () => Promise<unknown>) => Promise<void>; busy: boolean }) {
+  const [by, setBy] = useState("");
+  const [reason, setReason] = useState("");
+  return (
+    <Card title="SpO2 Scale 2 eligibility (FHIR Flag)">
+      <p className="text-xs text-navy-700">{status?.rule ?? "Scale 2 needs an attributed clinician decision; a diagnosis alone never switches the scale."}</p>
+      {status?.flag ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+          <span className="rounded bg-navy-900 px-2 py-0.5 text-xs font-bold text-white">Scale 2 active</span>
+          <span className="text-navy-700">{status.flag.reference} · by {status.flag.author} · {status.flag.reason}</span>
+          <button type="button" disabled={busy} onClick={() => onAction(() => clearScale2(patientId!))} className="rounded-lg border border-slate-300 px-3 py-1 text-xs font-semibold">Deactivate</button>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <input aria-label="Prescribed by" placeholder="Prescribed by (clinician)" value={by} onChange={(e) => setBy(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+          <input aria-label="Reason" placeholder="Reason, e.g. target 88–92% for hypercapnic respiratory failure" value={reason} onChange={(e) => setReason(e.target.value)} className="min-w-0 flex-[2] rounded-lg border border-slate-300 px-2 py-1.5 text-sm" />
+          <button type="button" disabled={!patientId || busy || by.trim().length < 2 || reason.trim().length < 5}
+            onClick={() => onAction(() => setScale2(patientId!, by.trim(), reason.trim()))}
+            className="rounded-lg bg-navy-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40">Record Scale 2 decision</button>
+        </div>
+      )}
+      <p className="mt-1 text-[11px] text-navy-500">Supporting conditions on record: {status?.supportingConditions.length ? status.supportingConditions.join(", ") : "none"}</p>
+    </Card>
+  );
+}
+
+function EvaluationCard({ patientId }: { patientId: string | null }) {
+  const [report, setReport] = useState<EvaluationReport | null>(null);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { fetchLatestEvaluation().then(setReport).catch(() => setReport(null)); }, []);
+  const cell = (v: number | boolean | null | undefined, suffix = "") => (v === null || v === undefined ? "—" : typeof v === "boolean" ? (v ? "yes" : "no") : `${v}${suffix}`);
+  return (
+    <Card title="Scenario replay evaluation: fixed vs personalized" right={
+      <button type="button" disabled={!patientId || running} onClick={async () => {
+        setRunning(true); setErr(null);
+        try { setReport(await runEvaluation(patientId!)); } catch (e: any) { setErr(String(e?.message ?? e)); } finally { setRunning(false); }
+      }} className="rounded-lg bg-teal-700 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
+        {running ? "Running (about 45 s)…" : "Run evaluation (4 scenarios × 4 h)"}
+      </button>}>
+      {err && <p className="mb-2 rounded bg-red-50 p-2 text-xs text-red-800">{err}</p>}
+      {!report ? <p className="text-sm text-navy-500">No evaluation yet. Each run replays seeded scenarios into HAPI, reads them back and scores both detector modes.</p> : (
+        <div className="overflow-x-auto" data-testid="evaluation">
+          <p className="mb-2 text-[11px] text-navy-500">{report.dataSource} · {report.durationMinutes} min per scenario at {report.intervalSeconds} s · generated {new Date(report.generatedAt).toLocaleString()} · SpO2 Scale {report.spo2Scale}</p>
+          <table className="w-full min-w-[760px] text-left text-xs">
+            <thead className="uppercase text-navy-500">
+              <tr><th className="py-1 pr-2">Scenario</th><th className="pr-2">Mode</th><th className="pr-2">Alert episodes</th><th className="pr-2">Alerts / patient-day</th><th className="pr-2">False alert episodes (artifact)</th><th className="pr-2">Onset → first WATCH</th><th className="pr-2">Lead before critical</th><th className="pr-2">Explained</th><th className="pr-2">Peak</th><th>FHIR confirmed</th></tr>
+            </thead>
+            <tbody>
+              {report.scenarios.flatMap((s) => (["fixed", "personalized"] as DetectorMode[]).map((m) => {
+                const v = s.modes[m];
+                return (
+                  <tr key={s.scenario + m} className="border-t border-slate-100">
+                    <td className="py-1 pr-2 font-medium text-navy-900">{m === "fixed" ? s.scenarioName : ""}</td>
+                    <td className="pr-2">{m}</td>
+                    <td className="pr-2">{v.alertEpisodes}</td>
+                    <td className="pr-2">{cell(v.alertsPerPatientDay)}</td>
+                    <td className="pr-2">{v.falseAlertEpisodes} ({v.artifactAlertEpisodes})</td>
+                    <td className="pr-2">{cell(v.onsetToFirstWatchMin, " min")}</td>
+                    <td className="pr-2">{cell(v.leadTimeBeforeCriticalMin, " min")}</td>
+                    <td className="pr-2">{cell(v.explainabilityPct, "%")}</td>
+                    <td className="pr-2">{v.peakLevel}</td>
+                    <td>{m === "fixed" ? `${s.fhirCompliance.confirmedPct}% · ${s.fhirCompliance.sampleErrors} $validate errors` : ""}</td>
+                  </tr>
+                );
+              }))}
+            </tbody>
+          </table>
+          <p className="mt-2 text-[11px] text-navy-500">Simulated, seeded scenarios only; not clinical evidence. "Critical" is a scripted ground-truth point (≥2 of SpO2 ≤91, pulse ≥131, RR ≥25), never visible to the detector.</p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function VitalCard({ v, monitor, alerts }: { v: (typeof VITALS)[number]; monitor: Monitor | null; alerts: Alert[] }) {
   const data = monitor?.vitals[v.key];
   const latest = data?.latest;
@@ -116,6 +277,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [readBack, setReadBack] = useState<{ id: string; at: string; body: Record<string, any> } | { error: string } | null>(null);
   const inFlight = useRef(false);
+  const [mode, setMode] = useState<DetectorMode>("personalized");
 
   useEffect(() => {
     const load = () => fetchStatus().then(setStatus).catch(() => setStatus("down"));
@@ -145,13 +307,13 @@ export default function App() {
     if (!selected || inFlight.current) return;
     inFlight.current = true;
     try {
-      setMonitor(await fetchMonitor(selected));
+      setMonitor(await fetchMonitor(selected, mode));
     } catch {
       /* keep last good frame; status pill shows connectivity */
     } finally {
       inFlight.current = false;
     }
-  }, [selected]);
+  }, [selected, mode]);
 
   useEffect(() => {
     void poll();
@@ -213,15 +375,15 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto grid w-full max-w-7xl flex-1 gap-5 px-6 py-6 lg:grid-cols-[300px_1fr]">
+      <main className="mx-auto grid w-full max-w-7xl flex-1 grid-cols-1 gap-5 px-4 py-6 sm:px-6 lg:grid-cols-[300px_minmax(0,1fr)]">
         {/* ---------------- patients ---------------- */}
-        <aside className="space-y-3">
+        <aside className="min-w-0 space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-navy-500">Discharged patients</h2>
           {patientsError && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800">Could not load patients: {patientsError}</p>}
           {!patients && !patientsError && <p className="text-sm text-navy-500">Loading patients from HAPI FHIR…</p>}
-          <ul className="space-y-2">
+          <ul className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 lg:mx-0 lg:block lg:space-y-2 lg:overflow-visible lg:px-0">
             {patients?.map((p) => (
-              <li key={p.id}>
+              <li key={p.id} className="w-64 shrink-0 lg:w-auto">
                 <button
                   type="button"
                   onClick={() => setSelected(p.id)}
@@ -241,9 +403,9 @@ export default function App() {
           </ul>
         </aside>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {/* ---------------- patient + controls ---------------- */}
-          <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+          <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
             <Card title="Patient profile" right={<span className="text-[11px] text-navy-500">FHIR Patient/{selected?.slice(0, 8)}…</span>}>
               {!profile ? (
                 <p className="text-sm text-navy-500">{selected ? "Loading profile from HAPI FHIR…" : "Select a patient."}</p>
@@ -323,6 +485,8 @@ export default function App() {
             </Card>
           </div>
 
+          <ReplayPanel patientId={selected} monitor={monitor} onAction={act} busy={busy} />
+
           {/* ---------------- risk ---------------- */}
           <section data-testid="risk-panel" className={`rounded-2xl border p-5 shadow-sm ${RISK_STYLE[level].panel}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -333,10 +497,44 @@ export default function App() {
                   <p className="text-sm text-navy-700">{risk?.summary ?? "Waiting for data…"}</p>
                 </div>
               </div>
-              <p className="text-[11px] text-navy-500">
-                {monitor ? `${monitor.observationCount} observations since ${time(monitor.windowStart)} · evaluated ${time(monitor.evaluatedAt)}` : ""}
-              </p>
+              <div className="flex flex-col items-end gap-1">
+                <div role="group" aria-label="Detection mode" className="inline-flex overflow-hidden rounded-lg border border-slate-300 bg-white text-xs font-semibold">
+                  {(["personalized", "fixed"] as DetectorMode[]).map((m) => (
+                    <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)}
+                      className={`px-3 py-1.5 ${mode === m ? "bg-navy-900 text-white" : "text-navy-700 hover:bg-slate-50"}`}>
+                      {m === "personalized" ? "Personalized + artifact filter" : "Fixed thresholds"}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-navy-500">
+                  {monitor ? `${monitor.observationCount} observations since ${time(monitor.windowStart)} · evaluated ${time(monitor.evaluatedAt)}` : ""}
+                </p>
+              </div>
             </div>
+            {risk?.news2 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs" data-testid="news2">
+                <span className="rounded-lg bg-white/70 px-2 py-1 font-semibold text-navy-900 ring-1 ring-black/5">
+                  NEWS2-style {risk.news2.total} (partial {risk.news2.measuredParameters}/{risk.news2.of})
+                </span>
+                {Object.entries(risk.news2.parameters).map(([k, p]) => (
+                  <span key={k} className="rounded-lg bg-white/70 px-2 py-1 text-navy-700 ring-1 ring-black/5">
+                    {k.replace("_", " ")} {p.value} → <strong>{p.score}</strong>{p.baseline ? ` · baseline ${p.baseline.median}` : ""}
+                  </span>
+                ))}
+                <span className={`rounded-lg px-2 py-1 font-semibold ${risk.news2.spo2Scale === 2 ? "bg-navy-900 text-white" : "bg-white/70 text-navy-700 ring-1 ring-black/5"}`}>
+                  SpO2 Scale {risk.news2.spo2Scale}
+                </span>
+                <span className="text-navy-500">not measured: {risk.news2.notAvailable.join(", ")}</span>
+              </div>
+            )}
+            {!!risk?.suppressedCount && (
+              <details className="mt-2 text-xs text-navy-700" data-testid="suppressed">
+                <summary className="cursor-pointer font-semibold">Sensor Trust Engine suppressed {risk.suppressedCount} reading(s)</summary>
+                <ul className="mt-1 space-y-0.5">
+                  {risk.suppressed?.slice(-6).map((s, i) => <li key={i}>• {s.vital.replace("_", " ")} {s.value} at {time(s.effective)}: {s.reason} <span className="font-mono text-[10px]">{s.observation}</span></li>)}
+                </ul>
+              </details>
+            )}
             {risk && risk.alerts.length > 0 && (
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -376,8 +574,18 @@ export default function App() {
                   <dt className="text-navy-500">Latest Observation</dt><dd className="font-mono font-semibold text-navy-900">{monitor.fhirProof.observation}</dd>
                   <dt className="text-navy-500">HAPI versionId</dt><dd>{monitor.fhirProof.versionId}</dd>
                   <dt className="text-navy-500">Stored at (HAPI)</dt><dd>{monitor.fhirProof.lastUpdated}</dd>
-                  <dt className="text-navy-500">HAPI $validate errors</dt><dd>{monitor.fhirProof.hapiValidationErrors ?? "—"}</dd>
-                  <dt className="text-navy-500">Read-back on ingest</dt><dd>{monitor.fhirProof.readBackMatches === true ? "✔ matches what was sent" : monitor.fhirProof.readBackMatches === false ? "✖ mismatch" : "—"}</dd>
+                  {monitor.fhirProof.replay ? (
+                    <>
+                      <dt className="text-navy-500">Persisted via</dt><dd>replay batch {monitor.fhirProof.replay.batch} · HAPI transaction confirmed ({monitor.fhirProof.replay.persistStatus === "created" ? "201 Created" : "200 already stored"})</dd>
+                      <dt className="text-navy-500">Measured (simulated)</dt><dd>{monitor.fhirProof.replay.measuredAt}</dd>
+                      <dt className="text-navy-500">Validation</dt><dd>{monitor.fhirProof.replay.validation}</dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt className="text-navy-500">HAPI $validate errors</dt><dd>{monitor.fhirProof.hapiValidationErrors ?? "—"}</dd>
+                      <dt className="text-navy-500">Read-back on ingest</dt><dd>{monitor.fhirProof.readBackMatches === true ? "✔ matches what was sent" : monitor.fhirProof.readBackMatches === false ? "✖ mismatch" : "—"}</dd>
+                    </>
+                  )}
                   <dt className="text-navy-500">HAPI URL</dt><dd className="truncate"><a className="text-teal-700 underline" href={monitor.fhirProof.hapiUrl} target="_blank" rel="noreferrer">{monitor.fhirProof.hapiUrl}</a></dd>
                 </dl>
                 <div>
@@ -397,6 +605,8 @@ export default function App() {
               </div>
             )}
           </Card>
+          <Scale2Card patientId={selected} status={monitor?.scale2 ?? null} onAction={act} busy={busy} />
+          <EvaluationCard patientId={selected} />
         </div>
       </main>
 
