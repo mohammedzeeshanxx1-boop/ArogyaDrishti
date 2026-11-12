@@ -113,7 +113,8 @@ def test_patient_accounts_cannot_use_doctor_features(client):
                                ("post", "/api/alerts/1/acknowledge", None), ("post", "/api/patients", {"name": "A B"}),
                                ("post", "/api/patients/p-alex/account", {}), ("post", "/api/import/patients", {"rows": []}),
                                ("post", "/api/import/observations", {"rows": []}), ("get", "/api/export/patients.csv", None),
-                               ("get", "/api/export/patients/p-alex/observations.csv", None), ("get", "/api/export/patients/p-alex/record.csv", None)]:
+                               ("get", "/api/export/patients/p-alex/observations.csv", None), ("get", "/api/export/patients/p-alex/record.csv", None),
+                               ("post", "/api/early-detection/runs", {"patientId": "p-alex", "scenario": "deterioration"}), ("get", "/api/early-detection/prepared?patientId=p-alex", None)]:
         r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
         assert r.status_code == 403, (path, r.status_code)
     from starlette.websockets import WebSocketDisconnect

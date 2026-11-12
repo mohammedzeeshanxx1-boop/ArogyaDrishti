@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchMe, fetchStatus, logout, setUnauthorizedHandler, type StatusResponse, type User } from "./api";
-import { IconBell, IconChart, IconDatabase, IconFile, IconGrid, IconPulse, IconUser, IconUsers, IconVideo } from "./components/icons";
+import { IconBell, IconChart, IconDatabase, IconFile, IconFlask, IconGrid, IconPulse, IconUser, IconUsers, IconVideo } from "./components/icons";
+import { EarlyDetectionLab } from "./pages/lab";
 import { NotificationBell, NotificationProvider } from "./notifications";
 import { DataManagement, VideoConsultation } from "./pages/data";
 import { Shell, type NavItem } from "./components/Shell";
@@ -14,6 +15,7 @@ const DOCTOR_NAV: NavItem[] = [
   { href: "#/doctor", label: "Dashboard", icon: IconGrid, match: (h) => h === "#/doctor" || h === "#/doctor/" },
   { href: "#/doctor/patients", label: "Patients", icon: IconUsers, match: (h) => h.startsWith("#/doctor/patients") },
   { href: "#/doctor/alerts", label: "Alerts", icon: IconBell, match: (h) => h.startsWith("#/doctor/alerts") },
+  { href: "#/doctor/lab", label: "Early Detection Lab", icon: IconFlask, match: (h) => h.startsWith("#/doctor/lab") },
   { href: "#/doctor/data", label: "Data Management", icon: IconDatabase, match: (h) => h.startsWith("#/doctor/data") },
   { href: "#/doctor/video", label: "Video Consultation", icon: IconVideo, match: (h) => h.startsWith("#/doctor/video") },
 ];
@@ -52,6 +54,7 @@ function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: str
   const [title, page] = pid ? ["Patient monitoring", <PatientMonitor key={pid} pid={pid} />]
     : hash.startsWith("#/doctor/patients") ? ["Patient directory", <PatientDirectory />]
       : hash.startsWith("#/doctor/alerts") ? ["Alerts", <AlertsPage />]
+        : hash.startsWith("#/doctor/lab") ? ["Early Detection Lab", <EarlyDetectionLab />]
         : hash.startsWith("#/doctor/data") ? ["Data Management", <DataManagement />]
           : hash.startsWith("#/doctor/video") ? ["Video Consultation", <VideoConsultation role="doctor" />]
             : ["Dashboard", <DoctorDashboard />];

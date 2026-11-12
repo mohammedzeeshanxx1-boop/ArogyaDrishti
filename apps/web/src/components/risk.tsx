@@ -1,6 +1,13 @@
 import type { Alert, Monitor, RiskLevel, VitalKey } from "../api";
 import { LevelBadge, VITAL_META, fmtDateTime, fmtTime } from "./ui";
 
+/** Standard alert wording, shown only for levels the existing engine actually produced. */
+export const LEVEL_MESSAGE: Record<Exclude<RiskLevel, "NORMAL">, string> = {
+  WATCH: "Patient vitals are showing a concerning trend. Continued monitoring recommended.",
+  REVIEW: "Multiple vital signs are worsening. Clinical review recommended.",
+  URGENT: "Significant deterioration detected. Prompt clinical assessment recommended.",
+};
+
 const HEADLINE: Record<RiskLevel, string> = {
   NORMAL: "Readings are within the expected ranges. The monitoring rules indicate no action.",
   WATCH: "Early changes detected. Continue monitoring; consider checking in with the patient.",

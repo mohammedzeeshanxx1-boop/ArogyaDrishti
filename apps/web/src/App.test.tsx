@@ -233,3 +233,38 @@ describe("Data management helpers", () => {
     expect(a).toHaveAttribute("rel", "noopener noreferrer");
   });
 });
+
+describe("Early Detection Lab", () => {
+  it("plays back the same readings on both sides and reports 'Not detected' honestly", async () => {
+    window.location.hash = "#/doctor/lab";
+    const step = (t: string, spo2: number, level: string, alarm = false) => ({
+      t, readings: { spo2 }, latest: { spo2, heart_rate: 80, respiratory_rate: 16, body_temperature: 37 },
+      comparator: { alarm, breaches: alarm ? [{ vital: "spo2", value: spo2, text: `SpO₂ ${spo2} % below 90` }] : [] },
+      engine: { level, news2: level === "NORMAL" ? 0 : 1, measured: 4, alerts: level === "NORMAL" ? [] : [{ level, ruleType: "news2-parameter", vital: "spo2", vitalLabel: "SpO2", value: spo2, unit: "%", rule: "", reason: "", score: 1, baseline: null }], trend: false, suppressedNow: [] },
+      spo2Baseline: 97,
+    });
+    const analysis = {
+      comparator: { name: "Fixed-threshold comparator (demo)", description: "d", limits: {} }, engine: { name: "e", description: "d" },
+      start: "2026-11-12T10:00:00Z", end: "2026-11-12T10:01:00Z",
+      steps: [step("2026-11-12T10:00:00Z", 97, "NORMAL"), step("2026-11-12T10:01:00Z", 95, "WATCH")],
+      firstWarning: { index: 1, t: "2026-11-12T10:01:00Z", minutesFromStart: 1, latest: {}, level: "WATCH", news2: 1, alerts: [] },
+      firstTrendWarning: null, firstComparatorAlert: null, advantageMinutes: null, comparatorAlarmSteps: 0, engineAlertSteps: 1,
+      artifacts: { suppressed: [], comparatorAlarmsFromArtifacts: [], engineAlertsDuringArtifacts: 0 },
+    };
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor },
+      "/api/patients": { count: 1, patients: [{ id: "p1", name: "Ariane992 Kirlin939", source: "synthea" }] },
+      "/api/early-detection/prepared": { deterioration: { runId: "r1", state: "completed", progress: 1 } },
+      "/api/early-detection/runs/r1": { ready: true, session: { state: "completed", progress: 1, persisted: 8, eventsTotal: 8, scenarioName: "x", lastError: null }, analysis } }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("lab-prepared")).toHaveTextContent("plays instantly"));
+    fireEvent.click(screen.getByTestId("lab-run-early"));
+    await waitFor(() => expect(screen.getByTestId("lab-engine")).toBeInTheDocument());
+    expect(screen.getAllByTestId("lab-spo2").map((e) => e.textContent)).toEqual(["97%", "97%"]);   // same reading on both sides
+    fireEvent.click(screen.getByTestId("lab-skip"));
+    await waitFor(() => expect(screen.getByTestId("lab-summary")).toBeInTheDocument());
+    expect(screen.getByTestId("lab-sum-trad")).toHaveTextContent("Not detected");
+    expect(screen.getByTestId("lab-sum-engine")).toHaveTextContent("T+1 min");
+    expect(screen.getByTestId("lab-advantage")).toHaveTextContent("Only AROGYA DRISHTI detected it");
+    expect(screen.getByTestId("lab-disclaimer")).toHaveTextContent("Not for medical diagnosis");
+  });
+});

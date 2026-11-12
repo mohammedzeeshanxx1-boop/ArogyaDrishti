@@ -5,6 +5,7 @@ import {
 } from "./api";
 import { IconAlert, IconBell, IconCheck, IconX } from "./components/icons";
 import { LevelBadge, ago, fmtDateTime, fmtTime } from "./components/ui";
+import { LEVEL_MESSAGE } from "./components/risk";
 
 /**
  * Doctor notifications. The server's recorded risk events are the only source: nothing is assessed here.
@@ -168,7 +169,8 @@ function ToastStack({ toasts, onDismiss, onView }: { toasts: AlertEvent[]; onDis
                   <button type="button" onClick={() => onDismiss(t.id)} aria-label="Dismiss notification" className="-mr-1 -mt-1 rounded p-1 text-navy-500 hover:bg-black/5"><IconX width={16} height={16} /></button>
                 </div>
                 <div className="mt-0.5 flex items-center gap-2"><LevelBadge level={t.level} /><span className="text-xs text-navy-500">{fmtTime(t.measured_at ?? t.created_at)}</span></div>
-                <p className="mt-1.5 text-sm text-navy-900">{t.summary}</p>
+                {t.level !== "NORMAL" && <p className="mt-1.5 text-sm font-semibold text-navy-900">{LEVEL_MESSAGE[t.level]}</p>}
+                <p className="mt-1 text-sm text-navy-700">{t.summary}</p>
                 <button type="button" onClick={() => onView(t)} data-testid="toast-view"
                   className="mt-3 rounded-lg bg-navy-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-700">View patient</button>
               </div>

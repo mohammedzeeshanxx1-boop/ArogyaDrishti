@@ -221,3 +221,28 @@ export const exportUrls = {
   record: (pid: string) => `/api/export/patients/${enc(pid)}/record.csv`,
   observations: (pid: string) => `/api/export/patients/${enc(pid)}/observations.csv`,
 };
+
+// ---------------------------------------------------------------- Early Detection Lab (doctor only)
+export interface LabAlert { level: RiskLevel; ruleType: string; vital: VitalKey | null; vitalLabel: string; value: number; unit: string; rule: string; reason: string; score?: number; baseline: { median: number; mad: number; n: number } | null }
+export interface LabStep {
+  t: string; readings: Partial<Record<VitalKey, number>>; latest: Partial<Record<VitalKey, number>>;
+  comparator: { alarm: boolean; breaches: { vital: VitalKey; value: number; text: string }[] };
+  engine: { level: RiskLevel; news2: number; measured: number; alerts: LabAlert[]; trend: boolean; suppressedNow: { vital: VitalKey; value: number; reason: string }[] };
+  spo2Baseline: number | null;
+}
+export interface LabMarker { index: number; t: string; minutesFromStart: number; latest: Partial<Record<VitalKey, number>>; level?: RiskLevel; news2?: number; alerts?: LabAlert[]; breaches?: { vital: VitalKey; value: number; text: string }[] }
+export interface LabAnalysis {
+  comparator: { name: string; description: string; limits: Record<string, { low?: number; high?: number }> };
+  engine: { name: string; description: string };
+  start: string; end: string; steps: LabStep[];
+  firstWarning: LabMarker | null; firstTrendWarning: LabMarker | null; firstComparatorAlert: LabMarker | null; advantageMinutes: number | null;
+  comparatorAlarmSteps: number; engineAlertSteps: number;
+  artifacts: { suppressed: { vital: VitalKey; value: number; reason: string; effective: string }[]; comparatorAlarmsFromArtifacts: { vital: VitalKey; value: number; text: string; t: string; reason: string }[]; engineAlertsDuringArtifacts: number };
+}
+export interface LabRun { ready: boolean; session: { state: string; progress: number; persisted: number; eventsTotal: number; scenarioName: string; lastError: string | null }; analysis?: LabAnalysis }
+export type LabScenario = "deterioration" | "artifact";
+export const startLabRun = (patientId: string, scenario: LabScenario) => getJson<{ runId: string }>("/api/early-detection/runs", post({ patientId, scenario }));
+export const fetchLabRun = (runId: string) => getJson<LabRun>(`/api/early-detection/runs/${enc(runId)}`);
+export const fetchLabPrepared = (patientId: string) =>
+  getJson<Partial<Record<LabScenario, { runId: string; state: string; progress: number }>>>(`/api/early-detection/prepared?patientId=${enc(patientId)}`);
+export const fetchPatientList = () => getJson<{ count: number; patients: { id: string; name: string; source?: string }[] }>("/api/patients");

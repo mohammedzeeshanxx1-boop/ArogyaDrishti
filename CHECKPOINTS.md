@@ -31,6 +31,19 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## Early Detection Lab and alert presentation (2026-11-13, branch localhost-dev)
+
+- `app/early_detection.py` + `POST/GET /api/early-detection/runs`, `GET /api/early-detection/prepared` (doctor only): replays the existing seeded `deterioration` or `artifact` scenario into HAPI (batch, session-tagged, ending 4 h before now so it never enters the live 60-minute window; no live assessment or alert events), reads the stored readings back and walks them causally. At each step: the existing personalized engine (`detector.evaluate`, unchanged) and a labelled fixed single-reading comparator (SpO₂ < 90 %, HR < 50 / > 120, RR < 8 / > 30, T > 39.0 °C; no baseline, trend or artifact filtering).
+- Doctor Portal: Early Detection Lab page (`#/doctor/lab`, dashboard card): two comparison cards on identical readings, SpO₂ and heart-rate charts with fixed limit, personal baseline and both first-detection markers, result summary with the measured difference (or "Not detected"), false-alert demo with sensor-quality warnings.
+- Alerts: standard WATCH / REVIEW / URGENT wording (shown only for levels the engine produced), level-coloured cards, triggering reading; same wording in pop-ups.
+- Performance: the overview and patient-list rebuild are single-flight (polling requests no longer pile up on HAPI).
+
+Measured (seeded scenarios, also on live HAPI): deterioration: engine first warning T+60 min (WATCH, SpO₂ 95 % scores 1; personal-baseline trend at T+70 min), comparator first alarm T+108 min (heart rate 121) → 48 min earlier. Artifact scenario: comparator 10 alarms, all from faulty readings; engine 11 readings suppressed, 0 clinical alerts. Not a clinical study; depends on the scenario and comparator limits.
+
+Tests: 140 backend unit (4 new), 12 web (1 new), type-check, build; acceptance 17 PASS, 0 FAIL, 1 BLOCKED (BIDMC). Browser: both cards identical at every sampled step, markers shown, summary correct, false-alert demo shows comparator ALARM vs engine sensor-quality warning, second run starts in < 0.5 s, no console errors, no overflow at 390 px. Not verified on macOS.
+
+---
+
 ## AROGYA DRISHTI 2.0 Phases 2 + 3 (2026-11-13, branch localhost-dev)
 
 Checkpoint before changes: branch `checkpoint/pre-phase23` (= `359fd14`).
