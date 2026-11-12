@@ -113,7 +113,7 @@ def test_fhir_payload_contains_no_scenario_or_ground_truth():
 
 
 def test_detector_module_cannot_reach_ground_truth():
-    for module in ("risk.py",):
+    for module in ("risk.py", "detector.py"):
         tree = ast.parse((APP_DIR / module).read_text())
         imported = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
         imported |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
@@ -153,7 +153,7 @@ def test_batch_mode_persists_everything_without_waiting(tmp_path):
         assert len(rows) == len(s.events) and {r["persist_status"] for r in rows} == {"created"}
         assert all(r["measured_at"] < r["ingested_at"] for r in rows)   # measurement vs ingestion time kept apart
         assert sum(r["hapi_shape_validated"] for r in rows) == 4        # one $validate per vital
-        assert [t["label"] for t in store.ground_truth(db, s.id)] == ["stable", "deterioration_onset"]
+        assert [t["label"] for t in store.ground_truth(db, s.id)] == ["stable", "deterioration_onset", "critical"]
         stored = hapi.observations[rows[5]["observation_id"]]
         assert stored["effectiveDateTime"] == s.events[5].measured_at.isoformat()
         assert stored["subject"]["reference"] == "Patient/p1"
@@ -285,7 +285,7 @@ def app_client(tmp_path, hapi):
 def test_api_batch_session_and_monitor_view(tmp_path):
     hapi = FakeHapi()
     with app_client(tmp_path, hapi) as c:
-        assert {s["id"] for s in c.get("/api/replay/scenarios").json()["scenarios"]} == {"stable", "deterioration"}
+        assert {s["id"] for s in c.get("/api/replay/scenarios").json()["scenarios"]} == {"stable", "deterioration", "artifact", "deterioration_artifact"}
         r = c.post("/api/replay/sessions", json={"patientId": "p1", "scenario": "deterioration", "speed": "batch",
                                                  "durationMinutes": 60, "intervalSeconds": 60})
         assert r.status_code == 201, r.json()

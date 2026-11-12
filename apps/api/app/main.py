@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -33,7 +34,8 @@ from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
 from .patients import patient_profile, list_patients
-from .risk import VITAL_LABEL, evaluate, to_celsius
+from . import detector, evaluation, scale2
+from .risk import VITAL_LABEL, to_celsius
 from .replay import store as replay_store
 from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
 from .replay.persistence import SESSION_TAG_SYSTEM
@@ -41,7 +43,8 @@ from .replay.scenarios import SCENARIOS as REPLAY_SCENARIOS
 from .simulator import DEFAULT_INTERVAL, DEFAULT_STEPS, SCENARIOS, Simulator
 from .vitals import INGEST_TAG, LOINC, VITALS, validate_observation
 
-MONITOR_LIMIT = 2000  # most recent Observations shown and evaluated per monitor call (500 per vital)
+MONITOR_LIMIT = 480   # newest Observations per monitor call: 120 per vital, enough for the detector's baseline window;
+                      # stays under HAPI 5.7's 500-result paging cap (full histories use search_by_date)
 FHIR_ID = re.compile(r"^[A-Za-z0-9\-.]{1,64}$")
 FHIR_JSON = "application/fhir+json"
 
@@ -63,6 +66,18 @@ class StartRequest(BaseModel):
 
 class PatientRequest(BaseModel):
     patientId: str
+
+
+class Scale2Request(BaseModel):
+    prescribedBy: str = Field(..., min_length=2, max_length=120)
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
+class EvaluationRequest(BaseModel):
+    patientId: str
+    durationMinutes: int = Field(240, ge=30, le=24 * 60)
+    intervalSeconds: int = Field(60, ge=15, le=600)
+    scenarios: list[str] = ["stable", "deterioration", "artifact", "deterioration_artifact"]
 
 
 class ReplayCreate(BaseModel):
@@ -222,7 +237,7 @@ def create_app(
         return {"patientId": body.patientId, "windowStart": request.app.state.windows[body.patientId]["since"], "simulator": state}
 
     @app.get("/api/demo/monitor/{pid}")
-    async def monitor(pid: str, request: Request):
+    async def monitor(pid: str, request: Request, mode: str = Query("personalized", pattern="^(fixed|personalized)$")):
         """Everything the dashboard shows for one patient, computed from observations stored in HAPI."""
         if not FHIR_ID.match(pid):
             return fhir_error(400, "invalid", "patient id must be a FHIR id")
@@ -276,6 +291,7 @@ def create_app(
                     "validation": "local strict validation" + ("; HAPI $validate (first of this vital in the session)" if rep["hapi_shape_validated"] else
                                                               "; HAPI $validate done once per vital per session"),
                 }
+        s2 = await scale2.status(fhir(request), pid)
         sim = request.app.state.simulator.state.public()
         rs = request.app.state.replay.get(view["session"]) if view["session"] else None
         return {
@@ -286,10 +302,84 @@ def create_app(
             "observationCount": len(readings),
             "truncated": len(stored) >= MONITOR_LIMIT,
             "vitals": vitals,
-            "risk": evaluate(readings),
+            "risk": detector.evaluate(readings, mode=mode, scale2=s2["eligible"]),
+            "scale2": s2,
             "fhirProof": proof,
             "simulator": sim if sim["patientId"] == pid else None,
         }
+
+    # ------------------------------------------------------------ SpO2 Scale 2 (FHIR Flag)
+    @app.get("/api/patients/{pid}/scale2")
+    async def scale2_get(pid: str, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        return await scale2.status(fhir(request), pid)
+
+    @app.post("/api/patients/{pid}/scale2")
+    async def scale2_set(pid: str, body: Scale2Request, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        if await fhir(request).read("Patient", pid) is None:
+            return fhir_error(404, "not-found", f"Patient/{pid} not found")
+        try:
+            return await scale2.set_flag(fhir(request), pid, body.prescribedBy, body.reason)
+        except ValueError as exc:
+            return fhir_error(502, "exception", str(exc))
+
+    @app.delete("/api/patients/{pid}/scale2")
+    async def scale2_clear(pid: str, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        return await scale2.clear_flag(fhir(request), pid)
+
+    # ------------------------------------------------------------ evaluation
+    @app.post("/api/evaluation/run")
+    async def evaluation_run(body: EvaluationRequest, request: Request):
+        """Replay each scenario in batch mode, then evaluate fixed vs personalized on what HAPI stored."""
+        mgr = request.app.state.replay
+        if mgr.active():
+            return fhir_error(409, "conflict", "a replay session is active; stop it first")
+        if await fhir(request).read("Patient", body.patientId) is None:
+            return fhir_error(404, "not-found", f"Patient/{body.patientId} not found")
+        # Evaluation data is anchored 3 days back so it never overlaps live monitoring windows.
+        anchor = (datetime.now(timezone.utc) - timedelta(days=3, minutes=body.durationMinutes)).replace(second=0, microsecond=0)
+        s2 = (await scale2.status(fhir(request), body.patientId))["eligible"]
+        results = []
+        for sc in body.scenarios:
+            try:
+                s = await mgr.create(body.patientId, sc, None, anchor, body.durationMinutes, body.intervalSeconds, "batch", 400)
+            except ValueError as exc:
+                return _replay_error(exc)
+            await mgr.start(s.id)
+            await s.wait()
+            if s.state != "completed":
+                return fhir_error(502, "exception", f"replay of {sc} did not complete: {s.last_error}")
+            try:
+                result = await evaluation.evaluate_session(fhir(request), settings.sqlite_path, s.id, s2)
+            except RuntimeError as exc:
+                return fhir_error(502, "incomplete", str(exc))
+            results.append({"scenario": sc, "scenarioName": REPLAY_SCENARIOS[sc].name, "seed": s.params["seed"],
+                            "fingerprint": s.fingerprint, **result})
+        report = {
+            "generatedAt": _now(), "patientId": body.patientId, "durationMinutes": body.durationMinutes,
+            "intervalSeconds": body.intervalSeconds, "spo2Scale": 2 if s2 else 1, "dataSource": "simulated (seeded scenarios)",
+            "detectorLabel": detector.LABEL, "definitions": evaluation.__doc__, "scenarios": results,
+        }
+        out = Path(settings.sqlite_path).parent / "reports"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "evaluation-latest.json").write_text(json.dumps(report, indent=2, default=str))
+        request.app.state.latest_report = report
+        return JSONResponse(json.loads(json.dumps(report, default=str)))
+
+    @app.get("/api/evaluation/latest")
+    async def evaluation_latest(request: Request):
+        rep = getattr(request.app.state, "latest_report", None)
+        if rep is None:
+            p = Path(settings.sqlite_path).parent / "reports" / "evaluation-latest.json"
+            if not p.exists():
+                return fhir_error(404, "not-found", "no evaluation has been run yet")
+            return JSONResponse(json.loads(p.read_text()))
+        return JSONResponse(json.loads(json.dumps(rep, default=str)))
 
     # ------------------------------------------------------------ replay engine
     def _replay_error(exc: Exception) -> JSONResponse:

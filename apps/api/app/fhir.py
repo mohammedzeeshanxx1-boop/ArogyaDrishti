@@ -125,6 +125,41 @@ class FhirClient:
                 return out[:limit]
             r = await self.request("GET", nxt)
 
+    async def search_by_date(self, resource_type: str, params: dict, newest_first: bool = False,
+                             limit: int = 1_000_000, page: int = 200) -> list[dict]:
+        """Walk results with a date cursor instead of server paging.
+
+        HAPI 5.7 (run-server) was observed to stop following next links after 500 results, so
+        large result sets are fetched as repeated first pages, each starting at the last date seen.
+        """
+        out: dict[str, dict] = {}
+        base_dates = params.get("date", [])
+        base_dates = [base_dates] if isinstance(base_dates, str) else list(base_dates)
+        cursor: str | None = None
+        while len(out) < limit:
+            # HAPI rejects two bounds in the same direction, so the cursor (always tighter) replaces it.
+            prefix = "le" if newest_first else "ge"
+            dates = [d for d in base_dates if not (cursor and d.startswith(prefix))] + ([f"{prefix}{cursor}"] if cursor else [])
+            q = {**params, "_sort": "-date" if newest_first else "date", "_count": page}
+            if dates:
+                q["date"] = dates
+            r = await self.request("GET", resource_type, params=q)
+            if r.status != 200 or r.body.get("resourceType") != "Bundle":
+                raise FhirUnavailable(f"search {resource_type} -> HTTP {r.status}")
+            batch = [e["resource"] for e in r.body.get("entry", []) if "resource" in e]
+            new = [b for b in batch if b["id"] not in out]
+            for b in new:
+                out[b["id"]] = b
+            # Stop only when a page adds nothing new: the server may cap the page size below `page`.
+            if not batch or not new:
+                break
+            cursor = batch[-1].get("effectiveDateTime")
+            if cursor is None:
+                break
+        rows = list(out.values())
+        rows.sort(key=lambda o: (o.get("effectiveDateTime", ""), o["id"]), reverse=newest_first)
+        return rows[:limit]
+
     async def count(self, resource_type: str, params: dict) -> int:
         r = await self.request("GET", resource_type, params={**params, "_summary": "count"})
         if r.status != 200:

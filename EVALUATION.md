@@ -1,6 +1,29 @@
 # Evaluation
 
-**No results exist yet.** This file defines how each official PS-03 criterion will be measured. Numbers are added only when produced by a seeded, repeatable run, with the command that produced them.
+## Results (generated 2026-11-12T13:23:14 UTC, simulated data)
+
+Produced by `POST /api/evaluation/run` with `{"patientId": "88967114-c92a-2b59-06ff-a60a2c76e10a", "durationMinutes": 240}`; raw report: `docs/evaluation-latest.json`. Each scenario was replayed in batch mode into HAPI (964 Observations each), read back from HAPI, evaluated causally at every measurement time in both modes, and only then joined with ground truth. Seeds: stable 1001, deterioration 2002, artifact 3003, deterioration_artifact 4004. SpO2 Scale 1.
+
+| Scenario | Mode | Alert episodes | Alerts / patient-day | False alert episodes (from artifacts) | Onset → first WATCH | Lead before scripted critical | Explained alerts | Peak | FHIR confirmed / sample $validate errors |
+|---|---|---|---|---|---|---|---|---|---|
+| Stable Recovery | fixed | 0 | 0.0 | 0 (0) | — | — | — | NORMAL | 100.0% / 0 |
+|  | personalized | 0 | 0.0 | 0 (0) | — | — | — | NORMAL | 100.0% / 0 |
+| Gradual Deterioration | fixed | 2 | 12.0 | 0 (0) | 32.0 min | 43.0 min | 100.0% | URGENT | 100.0% / 0 |
+|  | personalized | 2 | 12.0 | 0 (0) | 32.0 min | 43.0 min | 100.0% | URGENT | 100.0% / 0 |
+| Stable with Sensor Artifacts | fixed | 6 | 36.0 | 6 (6) | — | — | 100.0% | REVIEW | 100.0% / 0 |
+|  | personalized | 0 | 0.0 | 0 (0) | — | — | — | NORMAL | 100.0% / 0 |
+| Deterioration with Sensor Artifacts | fixed | 8 | 48.0 | 2 (2) | 24.0 min | 93.0 min | 100.0% | URGENT | 100.0% / 0 |
+|  | personalized | 5 | 30.0 | 0 (0) | 31.0 min | 46.0 min | 100.0% | URGENT | 100.0% / 0 |
+
+How to read it:
+- Artifacts: the Sensor Trust Engine removed every artifact-driven false alert episode in both artifact scenarios (6 → 0, and 2 → 0).
+- On clean deterioration, personalized and fixed perform the same (43 min before the scripted critical point); the baseline rule gave no earlier warning in this scenario.
+- In "deterioration with artifacts", fixed mode's 93 min "lead" and earlier first WATCH are caused by artifact spikes after onset, not by true detection; personalized gives 46 min with 0 false episodes.
+- These are simulated, seeded scenarios with scripted ground truth. They are engineering measurements, not clinical evidence. Only 4 of 7 NEWS2 parameters are measured; the NEWS2 bands are transcribed from the RCP 2017 chart and still need verification against the PDF.
+
+## Metric definitions
+
+This file's earlier section below gave the planned definitions; the implemented ones are in `apps/api/app/evaluation.py` (module docstring).
 
 The working definitions below come from the project brief. They must be checked against the PS-03 PDF, which was not available at C0 (see CHECKPOINTS.md, blocker B1).
 
