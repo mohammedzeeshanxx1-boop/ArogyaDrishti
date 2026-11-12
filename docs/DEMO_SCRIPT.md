@@ -22,6 +22,18 @@ Open http://localhost:5173. The header pill must read **HAPI FHIR R4 connected �
 
 ---
 
+## Fallback demo (if live streaming fails)
+
+Use real observations that were already stored and verified. Never present a screenshot as live.
+
+1. **Recover first (30 s):** `scripts/dev/health.sh` → `scripts/dev/up.sh` (skips services already running). In the UI: **■ Stop**, **↺ Reset demo**, start again.
+2. **Screenshots of a real verified run:** `docs/screenshots/r1-deterioration-watch.png`, `r1-deterioration-urgent.png`, `r1-stable-normal.png`. Say "this is a recorded run from earlier today".
+3. **FHIR proof without the dashboard** (works whenever HAPI is up). These IDs were verified on 2026-11-12 and exist only in the HAPI database where they were created; on your Mac, use IDs from your own rehearsal run:
+   - Raw resource: `http://localhost:8090/baseR4/Observation/<id>`
+   - With validation and ingestion history: `http://localhost:8000/api/inspector/observations/<id>`
+   - Patients: `http://localhost:8000/api/patients`; API docs: `http://localhost:8000/docs`
+4. **Simulator without the UI:** `cd apps/api && ../../.venv/bin/python -m app.simulator --patient 1716c10f-ea14-a88c-3aee-f11e047be6b8 --scenario deterioration` prints each step and stored Observation ID. Then show risk with `curl http://localhost:8000/api/demo/monitor/1716c10f-ea14-a88c-3aee-f11e047be6b8`.
+
 If something goes wrong:
 - Pill shows API unreachable or HAPI not connected: run `scripts/dev/health.sh`, then `scripts/dev/up.sh` (already-running services are skipped).
 - Scenario seems stuck: press **■ Stop**, then **↺ Reset demo**, then start again.
