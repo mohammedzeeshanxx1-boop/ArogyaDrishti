@@ -1,0 +1,73 @@
+name: arogya-drishti
+
+# Four services: web -> api -> hapi-fhir -> database.
+# FHIR resources are stored only in HAPI FHIR (backed by PostgreSQL).
+# The API keeps app-only event metadata in SQLite on its own volume.
+
+services:
+  database:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hapi}
+      POSTGRES_USER: ${POSTGRES_USER:-hapi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (copy .env.example)}
+    volumes:
+      - hapi-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  hapi-fhir:
+    image: ${HAPI_IMAGE:-hapiproject/hapi:v7.4.0}
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      hapi.fhir.fhir_version: R4
+      hapi.fhir.server_address: http://localhost:${HAPI_PORT:-8090}/fhir
+      spring.datasource.url: jdbc:postgresql://database:5432/${POSTGRES_DB:-hapi}
+      spring.datasource.username: ${POSTGRES_USER:-hapi}
+      spring.datasource.password: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (copy .env.example)}
+      spring.datasource.driverClassName: org.postgresql.Driver
+      spring.jpa.properties.hibernate.dialect: ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect
+      spring.jpa.properties.hibernate.search.enabled: "false"
+    ports:
+      - "${HAPI_PORT:-8090}:8080"
+    # The HAPI image is assumed to have no shell or curl, so no container
+    # healthcheck is defined; readiness is reported by GET /api/v1/status.
+
+  api:
+    build:
+      context: ./apps/api
+    restart: unless-stopped
+    depends_on:
+      hapi-fhir:
+        condition: service_started
+    environment:
+      FHIR_BASE_URL: http://hapi-fhir:8080/fhir
+      FHIR_TIMEOUT_SECONDS: ${FHIR_TIMEOUT_SECONDS:-3}
+      APP_SQLITE_PATH: /data/app.db
+      CORS_ORIGINS: http://localhost:${WEB_PORT:-8080},http://localhost:5173
+    volumes:
+      - api-data:/data
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  hapi-db-data:
+  api-data:
