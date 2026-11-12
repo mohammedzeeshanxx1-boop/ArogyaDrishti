@@ -54,6 +54,7 @@ scripts/smoke.sh
 | Method and path | Purpose |
 |---|---|
 | `POST /api/fhir/Observation` | Ingest one R4 vital-sign Observation |
+| `GET /api/fhir/Observation/{id}` | One stored Observation, read from HAPI |
 | `GET /api/fhir/Observation?patient=&code=` | Ingested observations for a patient |
 | `GET /api/patients` | Synthetic discharge cohort |
 | `GET /api/patients/{id}/profile` | Discharge profile with completeness check |

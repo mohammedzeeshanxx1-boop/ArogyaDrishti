@@ -6,6 +6,7 @@ Endpoints:
   GET  /api/v1/status                         dependency status (HAPI FHIR, SQLite)
   POST /api/fhir/Observation                  ingest one R4 vital-sign Observation
   GET  /api/fhir/Observation?patient=&code=   observations stored in HAPI
+  GET  /api/fhir/Observation/{id}             one stored Observation, read from HAPI
   GET  /api/patients                          synthetic discharge cohort
   GET  /api/patients/{id}/profile             discharge profile
   GET  /api/inspector/observations/{id}       FHIR Inspector: stored resource + validation
@@ -116,6 +117,16 @@ def create_app(
             params["_tag"] = f"{INGEST_TAG['system']}|{INGEST_TAG['code']}"
         found = await fhir(request).search("Observation", params, limit=count)
         return {"patient": f"Patient/{patient}", "count": len(found), "observations": found}
+
+    @app.get("/api/fhir/Observation/{oid}")
+    async def read_observation(oid: str, request: Request):
+        """The stored Observation exactly as HAPI returns it (no local copy exists)."""
+        if not FHIR_ID.match(oid):
+            return fhir_error(400, "invalid", "observation id must be a FHIR id")
+        stored = await fhir(request).read("Observation", oid)
+        if stored is None:
+            return fhir_error(404, "not-found", f"Observation/{oid} not found")
+        return JSONResponse(stored, media_type=FHIR_JSON)
 
     # ------------------------------------------------------------ patients
     @app.get("/api/patients")

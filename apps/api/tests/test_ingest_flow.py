@@ -36,6 +36,9 @@ def test_valid_vital_is_validated_by_hapi_stored_and_read_back(tmp_path, loinc, 
         assert hapi.validate_calls[0][1]["meta"]["profile"] == [f"http://hl7.org/fhir/StructureDefinition/{profile}"]
         stored = hapi.observations[body["id"]]
         assert stored["meta"]["profile"] == [f"http://hl7.org/fhir/StructureDefinition/{profile}"]
+        got = c.get(f"/api/fhir/Observation/{body['id']}")
+        assert got.status_code == 200 and got.json() == stored
+        assert got.headers["content-type"].startswith("application/fhir+json")
         events = c.get("/api/inspector/ingestions").json()["events"]
         assert events[0]["outcome"] == "accepted" and events[0]["observation_id"] == body["id"]
 
@@ -88,6 +91,12 @@ def test_read_back_mismatch_is_reported_not_hidden(tmp_path):
     assert r.json()["readBack"]["differingFields"] == ["valueQuantity"]
 
 
+def test_unknown_observation_is_404(tmp_path):
+    with client_for(tmp_path, FakeHapi()) as c:
+        r = c.get("/api/fhir/Observation/424242")
+    assert r.status_code == 404 and r.json()["issue"][0]["code"] == "not-found"
+
+
 def test_hapi_down_gives_503_operation_outcome(tmp_path):
     with client_for(tmp_path, FakeHapi(down=True)) as c:
         r = c.post("/api/fhir/Observation", json=example_observation("8867-4", "p1", 72, WHEN))
@@ -97,5 +106,6 @@ def test_hapi_down_gives_503_operation_outcome(tmp_path):
 def test_bad_ids_are_rejected_before_any_fhir_call(tmp_path):
     with client_for(tmp_path, FakeHapi(down=True)) as c:
         assert c.get("/api/patients/bad id!/profile").status_code == 400
+        assert c.get("/api/fhir/Observation/bad id!").status_code == 400
         assert c.get("/api/inspector/observations/..%2F..").status_code in (400, 404)
         assert c.get("/api/fhir/Observation", params={"patient": "p1", "code": "1234-5"}).status_code == 400

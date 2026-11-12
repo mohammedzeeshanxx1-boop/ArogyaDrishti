@@ -109,6 +109,10 @@ def test_vital_is_stored_in_hapi_and_read_back(api, hapi, patient_id, loinc, val
     assert stored["valueQuantity"]["code"] == ucum and float(stored["valueQuantity"]["value"]) == value
     assert VITALS[loinc].profile in stored["meta"]["profile"]
 
+    # Retrieve it by id through the API (which reads from HAPI).
+    via_api = api.get(f"/api/fhir/Observation/{body['id']}")
+    assert via_api.status_code == 200 and via_api.json() == stored
+
     # And find it through a FHIR search on patient + code.
     found = api.get("/api/fhir/Observation", params={"patient": patient_id, "code": loinc, "_count": 200}).json()
     assert body["id"] in {o["id"] for o in found["observations"]}
