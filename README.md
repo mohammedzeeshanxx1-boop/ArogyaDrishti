@@ -24,12 +24,11 @@ See [CHECKPOINTS.md](CHECKPOINTS.md) for every command and its actual result.
 
 App-only event metadata goes to SQLite on the `api` volume. FHIR resources are never stored there.
 
-## Round 1 demo (MVP)
+## Using the prototype
 
-```bash
-scripts/dev/up.sh            # then open http://localhost:5173
-```
-Pick a patient → **Demonstrate Gradual Deterioration** (risk escalates WATCH → REVIEW → URGENT in about 30 s) or **Demonstrate Stable Recovery** (stays NORMAL). The script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md). The risk engine is a labelled prototype (not NEWS2); see CHECKPOINTS.md "ROUND 1 MVP" for exactly what is and is not built.
+Start the services (below), open http://localhost:5173 and pick a patient. The dashboard shows each discharged patient's monitoring status, latest vitals, risk level with reasons, alert history and SpO₂ scale. Patients without recent readings are shown as **Not assessed**.
+
+No monitoring source runs by default. To stream **simulated** readings for a patient: `scripts/dev/simulate.sh <patient-id> deterioration`. Developer tools (simulator, replay, evaluation, acceptance test) are described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Run on localhost (development)
 
