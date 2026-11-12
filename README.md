@@ -33,7 +33,7 @@ Pick a patient → **Demonstrate Gradual Deterioration** (risk escalates WATCH �
 
 ## Run on localhost (development)
 
-Needs Python 3.10+, Node 20+, Java 11+ on PATH (for Synthea) and curl.
+Needs **Python ≥ 3.10** (macOS's built-in 3.9 is not enough: `brew install python@3.12`), **Node ≥ 22.12** (`brew install node@22`; 20.19+ runs the app but not the web tests), curl, unzip and zip. Java is optional: `setup.sh` uses an installed Java 11/17/21 (e.g. `brew install openjdk@17`) or installs a private Java 17 into `.local/tools/jdk`. Every setup step reports PASS/FAIL with the exact fix, and `up.sh` refuses to start a service whose prerequisites are missing.
 
 ```bash
 scripts/dev/setup.sh      # once: .venv, npm packages, Java 11 runtime for HAPI

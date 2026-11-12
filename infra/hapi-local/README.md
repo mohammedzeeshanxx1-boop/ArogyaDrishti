@@ -5,7 +5,7 @@
 **This fallback** runs the official HAPI FHIR **5.7.0** CLI `run-server` command, a real HAPI JPA server with an on-disk H2 database. It was used to produce the C1 evidence because the build environment could not pull container images (Docker Hub, GHCR, Quay, ECR and Maven Central were all denied by its network policy; GitHub release downloads were allowed).
 
 ```bash
-JAVA11=/path/to/java11/bin/java infra/hapi-local/run.sh          # http://localhost:8090/baseR4
+HAPI_JAVA=/path/to/java infra/hapi-local/run.sh   # Java 11, 17 or 21; http://localhost:8090/baseR4
 FHIR_BASE_URL=http://localhost:8090/baseR4 uvicorn app.main:app  # in apps/api
 ```
 
@@ -13,7 +13,7 @@ FHIR_BASE_URL=http://localhost:8090/baseR4 uvicorn app.main:app  # in apps/api
 
 Out of the box, `run-server` fails on both Java 11 and Java 21 with `ArrayIndexOutOfBoundsException` in `org.jboss.jandex.Indexer`. Hibernate scans the whole 550 MB CLI jar, and the bundled Jandex cannot parse 10 Guava classes that carry Checker Framework type-use annotations.
 
-`run.sh` (1) verifies the official zip and jar by SHA-256, (2) lists the classes Jandex cannot index (`Scan.java`), (3) removes only the type-use annotation attributes from those classes (`Strip.java`, using the ASM copy inside the jar), and (4) re-scans and requires `bad=0`. Method bytecode is not changed. The original jar is kept; the patched copy is `hapi-fhir-cli-patched.jar`.
+`run.sh` (1) verifies the official zip and jar by SHA-256, (2) removes only the type-use annotation attributes from the 10 classes listed in `patch-classes.txt` with the pure-Python `strip_type_annotations.py` (no JDK or `javac` needed), and (3) writes the patched copy `hapi-fhir-cli-patched.jar`. Method bytecode is not changed. Verified 2026-11-12: the Jandex scan (`Scan.java`, optional, needs a JDK) reports 0 failures of 92,335 classes, and HAPI starts and stores data on Java 11, 17 and 21 (including the PyPI `jdk4py` Java 17 runtime that `scripts/dev/setup.sh` installs on macOS).
 
 Observed on 2026-11-12: 92,335 classes scanned, 10 failed before the patch and 0 after. HAPI then served `CapabilityStatement` with `fhirVersion 4.0.1` and software `HAPI FHIR Server 5.7.0`.
 
