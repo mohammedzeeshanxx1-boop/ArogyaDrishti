@@ -31,6 +31,27 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## PHASE 1: deterministic replay engine (2026-11-12)
+
+| # | Checkpoint | Status | Evidence |
+|---|---|---|---|
+| C1 | Existing MVP still works | PASS | Browser: stable NORMAL throughout; deterioration WATCH 15 s → REVIEW 21 s → URGENT 27 s; HAPI read-back Observation/23860 |
+| C2 | Replay controls | PASS | Unit lifecycle test; browser 10×: 8/124 → paused (held at 8 for 5 s) → resumed 12/124 → stopped 16/124 → reset CREATED 0/124 |
+| C3 | Same seed → same observations | PASS | Unit fingerprint tests; live: reset session re-read from HAPI identical to original (values, LOINC, UCUM, times, subject) |
+| C4 | Accelerated replay | PASS | Unit 1×/5×/10× clock tests; live 10× run of 4 simulated min completed in the expected wall time with pause held |
+| C5 | Batch without real-time wait | PASS | 24 simulated h (5,764 Observations) in 55 s, HAPI tag count 5,764, 15/15 batches confirmed; 2 h batch completed in 3.0 s |
+| C6 | Persisted resources read back | PASS | Live: 244 Observations read from HAPI match generated events; `/persistence` consistent and complete |
+| C7 | No ground-truth leakage | PASS | Ground truth only in SQLite `replay_ground_truth`; tests: event fields, FHIR payload scan, `risk.py` import check, API never calls `ground_truth()` |
+| C8 | Tests and build | PASS | `scripts/check.sh`: 95 unit, 28 live HAPI, 28 repo, 4 web, build: ALL CHECKS PASSED (155 tests) |
+
+Also: idempotent retries via conditional create (lost-response test: 0 duplicates); HAPI-down recovery (error state, cursor kept, resume completes).
+
+Incident fixed: about 600 benchmark Observations written straight to HAPI (bypassing validation; future-dated values of 70) polluted the live demo view. They were deleted by their `bench-` identifier, and the monitor now ignores future-dated readings (regression test added).
+
+Design: docs/REPLAY_SCHEMA.md. Not done: Synthea-history vs simulated count split in profile; BIDMC source (blocked, B4).
+
+---
+
 ## ROUND 1 MVP: end-to-end demo prototype (2026-11-12)
 
 **Scope: a working demonstration for the Round 1 evaluation. This is NOT completion of Phases 2–6.** It adds a minimal simulator, a prototype risk engine and a dashboard on top of the verified Phase 1 FHIR work. Not built: BIDMC replay, NEWS2 baseline, personalization rules, the Sensor Trust Engine / artifact suppression, Watch/Review/Urgent alert lifecycle beyond the live view, Replay Lab, comparative report, and the Judge Evidence Console.

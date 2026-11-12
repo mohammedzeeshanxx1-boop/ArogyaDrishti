@@ -86,4 +86,25 @@ describe("Round 1 dashboard", () => {
     await waitFor(() => expect(screen.getByTestId("risk-level")).toHaveTextContent("NORMAL"));
     expect(screen.getByText(/No observation stored in this monitoring window yet/)).toBeInTheDocument();
   });
+
+  it("shows replay session state, progress and HAPI confirmation", async () => {
+    const replay = {
+      sessionId: "abc123", patientId: "p1", source: "simulated", description: "x", scenario: "deterioration",
+      scenarioName: "Gradual Deterioration", seed: 2002, durationMinutes: 120, intervalSeconds: 60, speed: "10x",
+      state: "paused", anchor: "2026-11-12T06:00:00Z", endsAt: "2026-11-12T08:00:00Z", simulatedNow: "2026-11-12T06:30:00Z",
+      eventsTotal: 484, cursor: 124, persisted: 124, created: 124, existing: 0, progress: 0.256, batches: 31,
+      failedBatches: 0, lastError: null, fingerprint: "deadbeefcafe0000", resetFrom: null,
+    };
+    vi.stubGlobal("fetch", routeFetch({
+      "/api/v1/status": status,
+      "/api/patients/p1/profile": profile,
+      "/api/patients": patients,
+      "/api/demo/monitor/p1": { ...monitor, replay },
+    }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("replay-state")).toHaveTextContent("paused"));
+    expect(screen.getByTestId("replay-status")).toHaveTextContent("124/484 observations confirmed by HAPI");
+    expect(screen.getByRole("button", { name: "Resume replay" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Pause replay" })).toBeDisabled();
+  });
 });

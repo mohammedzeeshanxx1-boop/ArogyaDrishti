@@ -56,7 +56,7 @@ def test_status_reports_r4_server(tmp_path):
     assert services["fhir"]["status"] == "ok"
     assert services["fhir"]["fhirVersion"] == "4.0.1"
     assert services["fhir"]["isR4"] is True
-    assert services["eventStore"] == {"status": "ok", "schemaVersion": 2}
+    assert services["eventStore"] == {"status": "ok", "schemaVersion": 3}
 
 
 def test_status_flags_non_r4_server(tmp_path):

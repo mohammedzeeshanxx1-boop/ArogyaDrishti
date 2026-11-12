@@ -9,10 +9,13 @@ import {
   resetDemo,
   startScenario,
   stopScenario,
+  createReplay,
+  replayAction,
   type Alert,
   type Monitor,
   type PatientProfile,
   type PatientSummary,
+  type ReplaySpeed,
   type RiskLevel,
   type StatusResponse,
   type VitalKey,
@@ -63,6 +66,83 @@ function FhirPill({ status }: { status: StatusResponse | null | "down" }) {
       <span className={`h-2 w-2 rounded-full ${ok ? "bg-teal-300" : "bg-red-300"}`} />
       {text}
     </span>
+  );
+}
+
+function ReplayPanel({ patientId, monitor, onAction, busy }: {
+  patientId: string | null;
+  monitor: Monitor | null;
+  onAction: (fn: () => Promise<unknown>) => Promise<void>;
+  busy: boolean;
+}) {
+  const [scenario, setScenario] = useState("deterioration");
+  const [speed, setSpeed] = useState<ReplaySpeed>("10x");
+  const [duration, setDuration] = useState(120);
+  const r = monitor?.replay ?? null;
+  const st = r?.state;
+  // Any non-active session (created, stopped, completed, error) can be replaced by a new one.
+  const canStart = !!patientId && !(st === "running" || st === "paused");
+  const btn = "rounded-lg px-3 py-1.5 text-sm font-semibold disabled:opacity-40";
+  return (
+    <Card title="Replay engine (simulated time)" right={<span className="text-[11px] text-navy-500">deterministic · seeded</span>}>
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-xs text-navy-500">Scenario
+          <select aria-label="Replay scenario" value={scenario} onChange={(e) => setScenario(e.target.value)} className="mt-0.5 block rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-navy-900">
+            <option value="stable">Stable Recovery</option>
+            <option value="deterioration">Gradual Deterioration</option>
+          </select>
+        </label>
+        <label className="text-xs text-navy-500">Duration
+          <select aria-label="Replay duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))} className="mt-0.5 block rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-navy-900">
+            <option value={30}>30 min</option>
+            <option value={120}>2 h</option>
+            <option value={1440}>24 h</option>
+          </select>
+        </label>
+        <label className="text-xs text-navy-500">Speed
+          <select aria-label="Replay speed" value={speed} onChange={(e) => setSpeed(e.target.value as ReplaySpeed)} className="mt-0.5 block rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-navy-900">
+            <option value="1x">1×</option>
+            <option value="5x">5×</option>
+            <option value="10x">10×</option>
+            <option value="batch">Batch (no waiting)</option>
+          </select>
+        </label>
+        <button type="button" aria-label="Start replay" disabled={!canStart || busy} className={`${btn} bg-teal-700 text-white hover:bg-teal-600`}
+          onClick={() => onAction(async () => {
+            const s = await createReplay({ patientId: patientId!, scenario, speed, durationMinutes: duration });
+            await replayAction(s.sessionId, "start");
+          })}>▶ Start</button>
+        <button type="button" aria-label="Start reset session" disabled={!r || st !== "created" || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "start"))}>Start reset session</button>
+        <button type="button" aria-label="Pause replay" disabled={st !== "running" || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "pause"))}>❚❚ Pause</button>
+        <button type="button" aria-label="Resume replay" disabled={!(st === "paused" || st === "error") || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "resume"))}>▶ Resume</button>
+        <button type="button" aria-label="Stop replay" disabled={!(st === "running" || st === "paused") || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "stop"))}>■ Stop</button>
+        <button type="button" aria-label="Reset replay" disabled={!r || busy} className={`${btn} border border-slate-300 bg-white text-navy-900`}
+          onClick={() => onAction(() => replayAction(r!.sessionId, "reset"))}>↺ Reset</button>
+      </div>
+      {r ? (
+        <div className="mt-3 text-xs text-navy-700" aria-live="polite" data-testid="replay-status">
+          <div className="flex flex-wrap justify-between gap-2">
+            <span><strong>{r.scenarioName}</strong> · seed {r.seed} · {r.speed} · <span data-testid="replay-state" className="font-semibold uppercase">{r.state}</span></span>
+            <span>simulated time {new Date(r.simulatedNow).toLocaleString()}</span>
+          </div>
+          <div className="mt-1 h-2 rounded-full bg-slate-100">
+            <div className="h-2 rounded-full bg-teal-600 transition-all" style={{ width: `${Math.round(100 * r.progress)}%` }} />
+          </div>
+          <p className="mt-1">
+            {r.persisted}/{r.eventsTotal} observations confirmed by HAPI · {r.batches} batches{r.failedBatches ? ` · ${r.failedBatches} failed (retry with Resume)` : ""}
+            {r.existing ? ` · ${r.existing} already stored (idempotent retry)` : ""}
+          </p>
+          {r.lastError && <p className="mt-1 rounded bg-red-50 p-2 text-red-800">{r.lastError}</p>}
+          <p className="mt-1 text-[11px] text-navy-500">Session {r.sessionId}{r.resetFrom ? ` (reset of ${r.resetFrom})` : ""} · fingerprint {r.fingerprint.slice(0, 12)}…</p>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-navy-500">Replays seeded scenarios on a simulated clock and stores every reading in HAPI in batches. Measurement times are in the past; ingestion time is recorded separately.</p>
+      )}
+    </Card>
   );
 }
 
@@ -323,6 +403,8 @@ export default function App() {
             </Card>
           </div>
 
+          <ReplayPanel patientId={selected} monitor={monitor} onAction={act} busy={busy} />
+
           {/* ---------------- risk ---------------- */}
           <section data-testid="risk-panel" className={`rounded-2xl border p-5 shadow-sm ${RISK_STYLE[level].panel}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -376,8 +458,18 @@ export default function App() {
                   <dt className="text-navy-500">Latest Observation</dt><dd className="font-mono font-semibold text-navy-900">{monitor.fhirProof.observation}</dd>
                   <dt className="text-navy-500">HAPI versionId</dt><dd>{monitor.fhirProof.versionId}</dd>
                   <dt className="text-navy-500">Stored at (HAPI)</dt><dd>{monitor.fhirProof.lastUpdated}</dd>
-                  <dt className="text-navy-500">HAPI $validate errors</dt><dd>{monitor.fhirProof.hapiValidationErrors ?? "—"}</dd>
-                  <dt className="text-navy-500">Read-back on ingest</dt><dd>{monitor.fhirProof.readBackMatches === true ? "✔ matches what was sent" : monitor.fhirProof.readBackMatches === false ? "✖ mismatch" : "—"}</dd>
+                  {monitor.fhirProof.replay ? (
+                    <>
+                      <dt className="text-navy-500">Persisted via</dt><dd>replay batch {monitor.fhirProof.replay.batch} · HAPI transaction confirmed ({monitor.fhirProof.replay.persistStatus === "created" ? "201 Created" : "200 already stored"})</dd>
+                      <dt className="text-navy-500">Measured (simulated)</dt><dd>{monitor.fhirProof.replay.measuredAt}</dd>
+                      <dt className="text-navy-500">Validation</dt><dd>{monitor.fhirProof.replay.validation}</dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt className="text-navy-500">HAPI $validate errors</dt><dd>{monitor.fhirProof.hapiValidationErrors ?? "—"}</dd>
+                      <dt className="text-navy-500">Read-back on ingest</dt><dd>{monitor.fhirProof.readBackMatches === true ? "✔ matches what was sent" : monitor.fhirProof.readBackMatches === false ? "✖ mismatch" : "—"}</dd>
+                    </>
+                  )}
                   <dt className="text-navy-500">HAPI URL</dt><dd className="truncate"><a className="text-teal-700 underline" href={monitor.fhirProof.hapiUrl} target="_blank" rel="noreferrer">{monitor.fhirProof.hapiUrl}</a></dd>
                 </dl>
                 <div>

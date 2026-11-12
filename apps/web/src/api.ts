@@ -76,6 +76,38 @@ export interface FhirProof {
   hapiUrl: string;
   readBackMatches: boolean | null;
   hapiValidationErrors: number | null;
+  replay?: { sessionId: string; seq: number; batch: number; persistStatus: string; measuredAt: string; ingestedAt: string; validation: string } | null;
+}
+
+export type ReplayState = "created" | "running" | "paused" | "stopped" | "completed" | "error";
+export type ReplaySpeed = "1x" | "5x" | "10x" | "batch";
+
+export interface ReplaySession {
+  sessionId: string;
+  patientId: string;
+  source: string;
+  description: string;
+  scenario: string | null;
+  scenarioName: string | null;
+  seed: number | null;
+  durationMinutes: number | null;
+  intervalSeconds: number | null;
+  speed: ReplaySpeed;
+  state: ReplayState;
+  anchor: string;
+  endsAt: string;
+  simulatedNow: string;
+  eventsTotal: number;
+  cursor: number;
+  persisted: number;
+  created: number;
+  existing: number;
+  progress: number;
+  batches: number;
+  failedBatches: number;
+  lastError: string | null;
+  fingerprint: string;
+  resetFrom: string | null;
 }
 
 export interface Monitor {
@@ -87,6 +119,8 @@ export interface Monitor {
   risk: { level: RiskLevel; alerts: Alert[]; readingsConsidered: number; label: string; summary: string };
   fhirProof: FhirProof | null;
   simulator: SimulatorState | null;
+  replay: ReplaySession | null;
+  truncated?: boolean;
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -114,3 +148,8 @@ export const startScenario = (patientId: string, scenario: "stable" | "deteriora
   getJson<SimulatorState>("/api/demo/simulator/start", post({ patientId, scenario }));
 export const stopScenario = () => getJson<SimulatorState>("/api/demo/simulator/stop", post({}));
 export const resetDemo = (patientId: string) => getJson<{ windowStart: string }>("/api/demo/reset", post({ patientId }));
+
+export const createReplay = (body: { patientId: string; scenario: string; speed: ReplaySpeed; durationMinutes: number; intervalSeconds?: number }) =>
+  getJson<ReplaySession>("/api/replay/sessions", post(body));
+export const replayAction = (sessionId: string, action: "start" | "pause" | "resume" | "stop" | "reset") =>
+  getJson<ReplaySession>(`/api/replay/sessions/${encodeURIComponent(sessionId)}/${action}`, post({}));

@@ -70,6 +70,20 @@ class FhirClient:
             raise FhirUnavailable("FHIR server returned non-JSON") from exc
         return FhirResponse(resp.status_code, body, resp.headers)
 
+    async def transaction(self, bundle: dict) -> FhirResponse:
+        """POST a transaction/batch Bundle to the server base."""
+        try:
+            resp = await self._client.post(self.base_url, json=bundle, headers={"Content-Type": FHIR_JSON})
+        except httpx.HTTPError as exc:
+            raise FhirUnavailable(f"{type(exc).__name__} contacting FHIR server") from exc
+        if resp.status_code >= 500:
+            raise FhirUnavailable(f"FHIR server answered HTTP {resp.status_code}")
+        try:
+            body = resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise FhirUnavailable("FHIR server returned non-JSON") from exc
+        return FhirResponse(resp.status_code, body, resp.headers)
+
     async def read(self, resource_type: str, rid: str) -> dict | None:
         r = await self.request("GET", f"{resource_type}/{rid}")
         if r.status in (404, 410):

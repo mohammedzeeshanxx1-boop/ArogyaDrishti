@@ -12,7 +12,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -31,6 +31,66 @@ CREATE TABLE IF NOT EXISTS ingestion_events (
     read_back_matches INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_ingestion_obs ON ingestion_events(observation_id);
+
+-- Replay metadata (schema v3). Measurement VALUES are never stored here; HAPI is the
+-- only store of clinical data. These tables hold identifiers, timestamps and status
+-- so that evaluation can join FHIR Observations to measurement and ingestion times.
+CREATE TABLE IF NOT EXISTS replay_sessions (
+    session_id TEXT PRIMARY KEY,
+    source_kind TEXT NOT NULL,
+    scenario_id TEXT,
+    seed INTEGER,
+    patient_id TEXT NOT NULL,
+    anchor TEXT NOT NULL,
+    duration_minutes INTEGER NOT NULL,
+    interval_seconds INTEGER NOT NULL,
+    speed TEXT NOT NULL,
+    state TEXT NOT NULL,
+    events_total INTEGER NOT NULL,
+    events_fingerprint TEXT NOT NULL,
+    events_created INTEGER NOT NULL DEFAULT 0,
+    events_existing INTEGER NOT NULL DEFAULT 0,
+    cursor INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    last_error TEXT,
+    reset_from TEXT
+);
+CREATE TABLE IF NOT EXISTS replay_events (
+    session_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    vital TEXT NOT NULL,
+    loinc TEXT NOT NULL,
+    measured_at TEXT NOT NULL,      -- simulated / recorded measurement time (= effectiveDateTime)
+    ingested_at TEXT NOT NULL,      -- wall-clock time HAPI confirmed the batch
+    observation_id TEXT NOT NULL,
+    persist_status TEXT NOT NULL CHECK (persist_status IN ('created', 'existing')),
+    batch_no INTEGER NOT NULL,
+    hapi_shape_validated INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, seq)
+);
+CREATE TABLE IF NOT EXISTS replay_batches (
+    session_id TEXT NOT NULL,
+    batch_no INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('confirmed', 'failed')),
+    created INTEGER NOT NULL DEFAULT 0,
+    existing INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    PRIMARY KEY (session_id, batch_no)
+);
+-- EVALUATION ONLY. Read by app.replay.store.ground_truth(); never by the detector.
+CREATE TABLE IF NOT EXISTS replay_ground_truth (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT,
+    detail TEXT
+);
 """
 
 

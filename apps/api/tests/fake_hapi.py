@@ -22,6 +22,9 @@ class FakeHapi:
         self.observations: dict[str, dict] = {}
         self._ids = itertools.count(1000)
         self.validate_calls: list[tuple[str, dict]] = []
+        self.by_identifier: dict[str, str] = {}
+        self.transactions = 0
+        self.commit_then_fail = 0   # commit the next N transactions, then drop the connection (lost response)
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -29,6 +32,8 @@ class FakeHapi:
     def handle(self, req: httpx.Request) -> httpx.Response:
         if self.down:
             raise httpx.ConnectError("refused", request=req)
+        if req.method == "POST" and req.url.path.rstrip("/") == "/fhir":
+            return self._transaction(req)
         path = req.url.path.removeprefix("/fhir/")
         if req.method == "GET" and path.startswith("Patient/"):
             pid = path.split("/", 1)[1]
@@ -56,3 +61,27 @@ class FakeHapi:
                 return httpx.Response(200, json=self.observations[oid])
             return httpx.Response(404, json={"resourceType": "OperationOutcome", "issue": []})
         return httpx.Response(400, json={"resourceType": "OperationOutcome", "issue": [{"severity": "error", "diagnostics": f"fake: {req.method} {path}"}]})
+
+    def _transaction(self, req: httpx.Request) -> httpx.Response:
+        bundle = json.loads(req.content)
+        self.transactions += 1
+        out = []
+        for e in bundle["entry"]:
+            cond = e["request"].get("ifNoneExist", "")
+            key = cond.split("=", 1)[1] if cond.startswith("identifier=") else None
+            if key and key in self.by_identifier:
+                oid = self.by_identifier[key]
+                out.append({"response": {"status": "200 OK", "location": f"Observation/{oid}/_history/1"}})
+                continue
+            oid = str(next(self._ids))
+            stored = copy.deepcopy(e["resource"])
+            stored["id"] = oid
+            stored.setdefault("meta", {}).update(versionId="1", lastUpdated="2026-11-12T08:00:00Z")
+            self.observations[oid] = stored
+            if key:
+                self.by_identifier[key] = oid
+            out.append({"response": {"status": "201 Created", "location": f"Observation/{oid}/_history/1"}})
+        if self.commit_then_fail:
+            self.commit_then_fail -= 1
+            raise httpx.ReadError("connection dropped after commit", request=req)
+        return httpx.Response(200, json={"resourceType": "Bundle", "type": "transaction-response", "entry": out})
