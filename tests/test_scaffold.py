@@ -102,3 +102,46 @@ def test_disclaimer_is_identical_in_api_and_web():
     text = "Clinical decision support only. Not for medical diagnosis."
     assert text in (ROOT / "apps/api/app/config.py").read_text()
     assert text in (ROOT / "apps/web/src/brand.ts").read_text()
+
+
+# ------------------------------------------------------------- localhost-first
+CONTAINER_HOSTS = re.compile(r"\b(hapi-fhir|database|api):\d{2,5}\b")
+LOCAL_CODE = ["apps/api/app", "apps/web/src", "apps/web/vite.config.ts", "services/synthea/pipeline.py", "scripts/dev", "scripts/c1_persistence_check.py"]
+
+
+def test_no_container_hostnames_in_code_that_runs_on_localhost():
+    offenders = []
+    for rel in LOCAL_CODE:
+        p = ROOT / rel
+        for f in ([p] if p.is_file() else [x for x in p.rglob("*") if x.is_file()]):
+            for n, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
+                if CONTAINER_HOSTS.search(line):
+                    offenders.append(f"{f.relative_to(ROOT)}:{n}: {line.strip()}")
+    assert not offenders, offenders
+
+
+def test_local_env_example_defines_every_url_and_port():
+    env = dict(
+        line.split("=", 1) for line in (ROOT / ".env.local.example").read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+    assert env["FHIR_BASE_URL"].startswith("http://localhost:")
+    assert env["VITE_DEV_API_TARGET"] == f"http://localhost:{env['API_PORT']}"
+    assert env["WEB_PORT"] == "5173" and env["API_PORT"] == "8000"
+    assert f"http://localhost:{env['WEB_PORT']}" in env["CORS_ORIGINS"]
+
+
+def test_api_defaults_are_localhost(monkeypatch):
+    import sys
+    sys.path.insert(0, str(ROOT / "apps/api"))
+    from app.config import Settings
+    for k in ("FHIR_BASE_URL", "CORS_ORIGINS"):
+        monkeypatch.delenv(k, raising=False)
+    s = Settings.from_env()
+    assert s.fhir_base_url.startswith("http://localhost:")
+    assert "http://localhost:5173" in s.cors_origins
+
+
+def test_local_data_and_secrets_are_git_ignored():
+    ignored = (ROOT / ".gitignore").read_text().split()
+    assert {".local/", ".env.local", ".env"} <= set(ignored)

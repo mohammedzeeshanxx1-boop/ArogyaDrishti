@@ -12,3 +12,5 @@ services/synthea/output/
 .DS_Store
 services/synthea/.cache/
 infra/hapi-local/.work/
+.env.local
+.local/

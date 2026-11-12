@@ -9,4 +9,6 @@ Plan:
 - Confirm the dataset version, licence, citation and signal contents from the PhysioNet page at C2 and record them here before any use.
 - Convert replayed vitals to FHIR R4 Observations through the same ingestion path as the simulator.
 
-If PhysioNet cannot be reached from the build environment, C2 is reported as BLOCKED. Simulated data is never presented as BIDMC data.
+Status 2026-11-12: `physionet.org` and the `physionet-open` S3 mirror are both denied by the build workspace's network policy (CHECKPOINTS.md, B4). Until the recordings are available locally, the BIDMC part of C2 is BLOCKED. Simulated data is never presented as BIDMC data.
+
+Replay will run as a local Python process reading files from `services/bidmc/data/` (git-ignored).

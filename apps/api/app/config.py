@@ -20,9 +20,9 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://localhost:8080")
+        origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080")
         return cls(
-            fhir_base_url=os.environ.get("FHIR_BASE_URL", "http://localhost:8090/fhir").rstrip("/"),
+            fhir_base_url=os.environ.get("FHIR_BASE_URL", "http://localhost:8090/baseR4").rstrip("/"),
             fhir_timeout_seconds=float(os.environ.get("FHIR_TIMEOUT_SECONDS", "3")),
             sqlite_path=os.environ.get("APP_SQLITE_PATH", "./data/app.db"),
             cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),

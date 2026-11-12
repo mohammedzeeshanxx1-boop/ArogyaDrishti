@@ -1,6 +1,6 @@
 """Live tests against a real HAPI FHIR R4 server and the imported Synthea cohort.
 
-Configure with HAPI_TEST_FHIR_BASE (default http://localhost:8090/fhir).
+Configure with HAPI_TEST_FHIR_BASE, else FHIR_BASE_URL, else http://localhost:8090/baseR4 (local HAPI).
 If HAPI or the cohort is missing, tests are skipped with a reason starting
 "BLOCKED:" so the gap is visible (run pytest with -rs). They never pass
 without a live server.
@@ -21,7 +21,7 @@ from app.config import Settings
 from app.main import create_app
 from app.vitals import INGEST_TAG, LOINC, VITALS, example_observation
 
-BASE = os.environ.get("HAPI_TEST_FHIR_BASE", "http://localhost:8090/fhir").rstrip("/")
+BASE = (os.environ.get("HAPI_TEST_FHIR_BASE") or os.environ.get("FHIR_BASE_URL") or "http://localhost:8090/baseR4").rstrip("/")
 MANIFEST = Path(__file__).resolve().parents[4] / "services" / "synthea" / "output" / "manifest.json"
 FHIR = {"Accept": "application/fhir+json", "Content-Type": "application/fhir+json"}
 

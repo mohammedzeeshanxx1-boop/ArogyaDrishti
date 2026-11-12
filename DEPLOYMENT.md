@@ -1,5 +1,7 @@
 # Deployment
 
+Development runs on localhost without Docker; see the README section "Run on localhost". This file covers the container deployment, which is kept compatible but not yet run.
+
 > Status: the Docker path below is **untested**. Container registries were unreachable from the build environment, so no container has been built or started (CHECKPOINTS.md, blocker B2). The application itself was tested against a local HAPI 5.7.0 server; see "Without Docker" below.
 
 ## Requirements
@@ -29,7 +31,7 @@ Startup order: `database` (healthy) → `hapi-fhir` → `api` → `web`. HAPI ha
 
 ## Without Docker
 
-`infra/hapi-local/run.sh` runs the official HAPI FHIR 5.7.0 CLI server (Java 11) on `http://localhost:8090/baseR4` with an on-disk Derby database. Read `infra/hapi-local/README.md` first: the script patches type annotations in 10 Guava classes of a copy of the jar so the server can start. Point the API at it with `FHIR_BASE_URL=http://localhost:8090/baseR4` and load the cohort with `python3 services/synthea/pipeline.py all --fhir-base http://localhost:8090/baseR4`.
+`infra/hapi-local/run.sh` runs the official HAPI FHIR 5.7.0 CLI server (Java 11) on `http://localhost:8090/baseR4` with an on-disk H2 database. Read `infra/hapi-local/README.md` first: the script patches type annotations in 10 Guava classes of a copy of the jar so the server can start. Point the API at it with `FHIR_BASE_URL=http://localhost:8090/baseR4` and load the cohort with `python3 services/synthea/pipeline.py all --fhir-base http://localhost:8090/baseR4`.
 
 ## Configuration
 

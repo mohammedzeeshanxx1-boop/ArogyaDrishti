@@ -9,8 +9,8 @@
 Restart HAPI (e.g. `docker compose restart hapi-fhir`) between the two steps.
 
 Usage:
-  scripts/c1_persistence_check.py record --api http://localhost:8000 --fhir http://localhost:8090/fhir
-  scripts/c1_persistence_check.py check  --fhir http://localhost:8090/fhir
+  scripts/c1_persistence_check.py record --api http://localhost:8000 --fhir http://localhost:8090/baseR4
+  scripts/c1_persistence_check.py check  --fhir http://localhost:8090/baseR4
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -87,7 +88,7 @@ def check(args) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=["record", "check"])
-    ap.add_argument("--api", default="http://localhost:8000")
-    ap.add_argument("--fhir", default="http://localhost:8090/fhir")
+    ap.add_argument("--api", default=os.environ.get("API_URL", "http://localhost:8000"))
+    ap.add_argument("--fhir", default=os.environ.get("FHIR_BASE_URL", "http://localhost:8090/baseR4"))
     a = ap.parse_args()
     {"record": record, "check": check}[a.step](a)

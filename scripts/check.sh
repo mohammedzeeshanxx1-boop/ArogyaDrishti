@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Runs every offline check for the current checkpoint. Exits non-zero on any failure.
-# Usage: scripts/check.sh        (expects python3 and npm on PATH)
+# Usage: scripts/check.sh        (uses .venv/bin/python if present, else python3; needs npm)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-PY="${PYTHON:-python3}"
+PY="${PYTHON:-}"
+if [ -z "$PY" ]; then [ -x .venv/bin/python ] && PY="$PWD/.venv/bin/python" || PY=python3; fi
+case "$PY" in */*) PY="$(cd "$(dirname "$PY")" && pwd)/$(basename "$PY")" ;; esac  # absolute: steps cd into apps/
 fail=0
 step() {
   echo
@@ -15,7 +17,7 @@ step() {
 
 step "api: unit + flow tests" bash -c "cd apps/api && $PY -m pytest -q -m 'not live'"
 # Live tests skip with an explicit BLOCKED reason when HAPI is not reachable.
-step "api: live HAPI tests (HAPI_TEST_FHIR_BASE=${HAPI_TEST_FHIR_BASE:-http://localhost:8090/fhir})" bash -c "cd apps/api && $PY -m pytest -q -rs -m live"
+step "api: live HAPI tests (HAPI_TEST_FHIR_BASE=${HAPI_TEST_FHIR_BASE:-http://localhost:8090/baseR4})" bash -c "cd apps/api && $PY -m pytest -q -rs -m live"
 step "repo: scaffold + compose contract tests" "$PY" -m pytest -q tests
 step "web: typecheck" npm --prefix apps/web run --silent typecheck
 step "web: unit tests" npm --prefix apps/web run --silent test
