@@ -31,6 +31,24 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## macOS localhost fix (2026-11-12)
+
+Reported on macOS (Apple Silicon): setup and all three services failed. Root causes, verified against package metadata:
+- `fastapi==0.162.5` is a real release but needs Python ≥ 3.10 (so do uvicorn 0.54 and pytest 9.2). Under macOS Python 3.9, pip reports "No matching distribution", and the code's `int | None` annotations fail too. Pins kept; setup now finds Python ≥ 3.10 (3.13/3.12/3.11/3.10, Homebrew paths, or uv), moves an incompatible `.venv` aside and recreates it.
+- No Java 11 runtime exists for Apple Silicon on PyPI (`jdk4py` 11.x has no macOS arm64 wheel). The original HAPI crash was the class scanner, not the Java version: the patched jar runs on **Java 11, 17 and 21** (verified). Setup uses an installed 11/17/21 or installs `jdk4py==17.0.9.2` (wheels for macOS arm64/x86_64 and Linux x86_64).
+- Patching no longer needs `javac`: a pure-Python class-file tool strips the type-use annotations (Jandex re-scan: 0 failures of 92,335 classes).
+- Web `ERR_MODULE_NOT_FOUND`: `npm ci` never ran because setup aborted at the pip step. Setup now runs every step and reports PASS/FAIL; it checks Node (Vite 8 needs ^20.19 or ≥ 22.12, Vitest ≥ 22.12). `up.sh` checks prerequisites first and prints the fix.
+- `run.sh` uses `shasum -a 256` where `sha256sum` is missing (macOS).
+
+Verification in a fresh clone with a macOS-like PATH (`python3` = 3.9, existing 3.9 `.venv`, no `java`, alternate ports):
+- `setup.sh`: 3.9 venv moved aside, Python 3.13 venv (fastapi 0.162.5, pydantic 2.14.3), web packages (vite 8.3.8), private Java 17: SETUP OK.
+- `up.sh` → `seed.sh` (80 s) → `health.sh`: 8 PASS, 0 blocked.
+- `check.sh`: 114 unit, 28 live HAPI, 28 repo, 4 web, type-check, build: ALL CHECKS PASSED.
+
+Not exercised: the "no Python ≥ 3.10 anywhere" message (this machine has 3.13 under `/usr/local/bin`), and a real Mac. Finding: Synthea output depends on the Java major version (same seed: Java 21 → 18 patients, Java 17 → 17 patients, a different 8 selected). The manifest now records the Java version; reproducibility holds for a fixed Java version only.
+
+---
+
 ## P0 features: NEWS2-style scoring, Scale 2, Sensor Trust Engine, baselines, evaluation (2026-11-12)
 
 | Feature | Status | Evidence |

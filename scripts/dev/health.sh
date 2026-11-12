@@ -3,6 +3,7 @@
 # A check is BLOCKED (not FAIL) when the thing it depends on is not running.
 set -uo pipefail
 . "$(dirname "$0")/env.sh"
+PY="${PY:-python3}"
 API="http://localhost:$API_PORT"
 WEB="http://localhost:$WEB_PORT"
 fail=0
