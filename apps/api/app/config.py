@@ -13,9 +13,10 @@ DISCLAIMER = "Clinical decision support only. Not for medical diagnosis."
 @dataclass(frozen=True)
 class Settings:
     fhir_base_url: str
-    fhir_timeout_seconds: float
+    fhir_timeout_seconds: float  # status probe only
     sqlite_path: str
     cors_origins: tuple[str, ...]
+    fhir_request_timeout_seconds: float = 60.0  # reads, $validate, writes
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -25,4 +26,5 @@ class Settings:
             fhir_timeout_seconds=float(os.environ.get("FHIR_TIMEOUT_SECONDS", "3")),
             sqlite_path=os.environ.get("APP_SQLITE_PATH", "./data/app.db"),
             cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
+            fhir_request_timeout_seconds=float(os.environ.get("FHIR_REQUEST_TIMEOUT_SECONDS", "60")),
         )

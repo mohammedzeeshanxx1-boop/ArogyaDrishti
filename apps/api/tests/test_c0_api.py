@@ -46,7 +46,7 @@ def test_meta_carries_brand_and_disclaimer(tmp_path):
     assert body["name"] == "Arogya Drishti"
     assert body["tagline"] == "See the warning signs before they become emergencies."
     assert body["disclaimer"] == DISCLAIMER == "Clinical decision support only. Not for medical diagnosis."
-    assert body["checkpoint"] == "C0"
+    assert body["checkpoint"] == "C1"
 
 
 def test_status_reports_r4_server(tmp_path):
@@ -56,7 +56,7 @@ def test_status_reports_r4_server(tmp_path):
     assert services["fhir"]["status"] == "ok"
     assert services["fhir"]["fhirVersion"] == "4.0.1"
     assert services["fhir"]["isR4"] is True
-    assert services["eventStore"] == {"status": "ok", "schemaVersion": 1}
+    assert services["eventStore"] == {"status": "ok", "schemaVersion": 2}
 
 
 def test_status_flags_non_r4_server(tmp_path):

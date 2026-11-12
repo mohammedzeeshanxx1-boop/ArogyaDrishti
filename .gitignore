@@ -10,3 +10,5 @@ data/
 services/bidmc/data/
 services/synthea/output/
 .DS_Store
+services/synthea/.cache/
+infra/hapi-local/.work/

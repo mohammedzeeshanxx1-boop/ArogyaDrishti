@@ -13,14 +13,16 @@ step() {
   if "$@"; then echo "--- PASS"; else echo "--- FAIL"; fail=1; fi
 }
 
-step "api: pytest" bash -c "cd apps/api && $PY -m pytest -q"
+step "api: unit + flow tests" bash -c "cd apps/api && $PY -m pytest -q -m 'not live'"
+# Live tests skip with an explicit BLOCKED reason when HAPI is not reachable.
+step "api: live HAPI tests (HAPI_TEST_FHIR_BASE=${HAPI_TEST_FHIR_BASE:-http://localhost:8090/fhir})" bash -c "cd apps/api && $PY -m pytest -q -rs -m live"
 step "repo: scaffold + compose contract tests" "$PY" -m pytest -q tests
 step "web: typecheck" npm --prefix apps/web run --silent typecheck
 step "web: unit tests" npm --prefix apps/web run --silent test
 step "web: production build" npm --prefix apps/web run --silent build
 
 if command -v docker >/dev/null 2>&1; then
-  step "compose: config validates" docker compose --env-file .env.example config --quiet
+  step "compose: config validates" docker compose --env-file .env.example --profile seed config --quiet
 else
   echo; echo "=== compose: config validates ==="; echo "--- SKIPPED (docker not installed)"
 fi
