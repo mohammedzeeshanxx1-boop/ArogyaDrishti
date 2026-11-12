@@ -26,9 +26,9 @@ function ServiceDot({ ok, label }: { ok: boolean | null; label: string }) {
   );
 }
 
-export function Shell({ user, nav, hash, title, subtitle, status, onSignOut, children, portal }: {
+export function Shell({ user, nav, hash, title, subtitle, status, onSignOut, children, portal, headerRight }: {
   user: User; nav: NavItem[]; hash: string; title: string; subtitle?: ReactNode; status: StatusResponse | "down" | null;
-  onSignOut: () => void; children: ReactNode; portal: "Doctor Portal" | "Patient Portal";
+  onSignOut: () => void; children: ReactNode; portal: "Doctor Portal" | "Patient Portal"; headerRight?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const api = status === null ? null : status !== "down" && status.services.api.status === "ok";
@@ -83,7 +83,10 @@ export function Shell({ user, nav, hash, title, subtitle, status, onSignOut, chi
             <h1 className="truncate text-lg font-semibold text-navy-900 sm:text-xl" data-testid="page-title">{title}</h1>
             {subtitle && <div className="truncate text-xs text-navy-500 sm:text-sm">{subtitle}</div>}
           </div>
-          {api === false && <span className="ml-auto rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700" role="status">Backend disconnected</span>}
+          <div className="ml-auto flex items-center gap-3">
+            {api === false && <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700" role="status">Backend disconnected</span>}
+            {headerRight}
+          </div>
         </div>
       </header>
       <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-8">{children}</main>

@@ -100,6 +100,17 @@ def upsert_user(db_path: str, username: str, role: str, display_name: str, passw
         c.execute("DELETE FROM auth_sessions WHERE username = ?", (username,))   # a new password ends old sessions
 
 
+def user_for_patient(db_path: str, patient_id: str) -> dict | None:
+    with connect(db_path) as c:
+        row = c.execute("SELECT * FROM auth_users WHERE patient_id = ?", (patient_id,)).fetchone()
+    return _public(row) if row else None
+
+
+def usernames(db_path: str) -> set[str]:
+    with connect(db_path) as c:
+        return {r[0] for r in c.execute("SELECT username FROM auth_users")}
+
+
 def user_exists(db_path: str, username: str) -> bool:
     with connect(db_path) as c:
         return c.execute("SELECT 1 FROM auth_users WHERE username = ?", (username,)).fetchone() is not None

@@ -31,6 +31,18 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## AROGYA DRISHTI 2.0 Phases 2 + 3 (2026-11-13, branch localhost-dev)
+
+Checkpoint before changes: branch `checkpoint/pre-phase23` (= `359fd14`).
+
+- Notifications (`app/notifications.py`, `/api/notifications*`, `/api/alerts/{id}/acknowledge`, `/ws/notifications`): built on the recorded risk events; per-doctor baseline cursor (older history is never "new"), read receipts and acknowledgements in SQLite; WebSocket push with reconnection and cursor-based polling fallback; toasts and bell mounted in the Doctor Portal shell.
+- Patient management (`app/datamgmt.py`): `POST /api/patients` (FHIR Patient + discharge Encounter, idempotent requestId, name+birth-date duplicate check), `POST /api/patients/{id}/account` (explicit login, random one-time password), CSV import of patients/observations (all-or-nothing validation; observations through the ingestion pipeline, labelled CSV import), CSV exports with formula-injection protection. All doctor-only by the existing deny-by-default middleware.
+- SparkMeet links (single `SPARKMEET_URL` constant) in both portals.
+
+Verified here (Linux, headless Chrome, live HAPI): a deterioration run produced 3 new events → exactly 3 toasts (WATCH, REVIEW, URGENT) while the doctor moved between Patients, Alerts, Data Management and Video pages; no replay on reload; bell unread, mark-read and acknowledgement persisted after reload; patient account 403 on notifications, acknowledge, patient creation, import and export; Add Patient created Patient + Encounter in HAPI and appeared in the directory; same requestId twice → same patient; duplicate name+DOB → 409; new patient's one-time login worked; invalid CSV files rejected with row-level errors and nothing written; 2 patients and 12 observations imported; exports correct (UTF-8, attachment, CSV-import source label); SparkMeet links target=_blank rel=noopener noreferrer. Tests: 136 backend unit (7 new), 11 web (3 new), type-check, build; acceptance 17 PASS, 0 FAIL, 1 BLOCKED (BIDMC; patients_8 now counts the 8 Synthea records and reports portal-registered ones separately). Not verified on macOS.
+
+---
+
 ## AROGYA DRISHTI 2.0 Phase 1: Doctor Portal and Patient Portal (2026-11-13, branch localhost-dev)
 
 Checkpoint before changes: branch `checkpoint/pre-portals` (= `7090cc1`).

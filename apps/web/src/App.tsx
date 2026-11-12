@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchMe, fetchStatus, logout, setUnauthorizedHandler, type StatusResponse, type User } from "./api";
-import { IconBell, IconChart, IconFile, IconGrid, IconPulse, IconUser, IconUsers } from "./components/icons";
+import { IconBell, IconChart, IconDatabase, IconFile, IconGrid, IconPulse, IconUser, IconUsers, IconVideo } from "./components/icons";
+import { NotificationBell, NotificationProvider } from "./notifications";
+import { DataManagement, VideoConsultation } from "./pages/data";
 import { Shell, type NavItem } from "./components/Shell";
 import { displayName } from "./components/ui";
 import { useMonitor } from "./monitor";
@@ -12,12 +14,15 @@ const DOCTOR_NAV: NavItem[] = [
   { href: "#/doctor", label: "Dashboard", icon: IconGrid, match: (h) => h === "#/doctor" || h === "#/doctor/" },
   { href: "#/doctor/patients", label: "Patients", icon: IconUsers, match: (h) => h.startsWith("#/doctor/patients") },
   { href: "#/doctor/alerts", label: "Alerts", icon: IconBell, match: (h) => h.startsWith("#/doctor/alerts") },
+  { href: "#/doctor/data", label: "Data Management", icon: IconDatabase, match: (h) => h.startsWith("#/doctor/data") },
+  { href: "#/doctor/video", label: "Video Consultation", icon: IconVideo, match: (h) => h.startsWith("#/doctor/video") },
 ];
 const PATIENT_NAV: NavItem[] = [
   { href: "#/me", label: "My Health", icon: IconPulse, match: (h) => h === "#/me" || h === "#/me/" },
   { href: "#/me/trends", label: "My Health Trends", icon: IconChart, match: (h) => h.startsWith("#/me/trends") },
   { href: "#/me/records", label: "My Medical Records", icon: IconFile, match: (h) => h.startsWith("#/me/records") },
   { href: "#/me/profile", label: "My Profile", icon: IconUser, match: (h) => h.startsWith("#/me/profile") },
+  { href: "#/me/video", label: "Video Consultation", icon: IconVideo, match: (h) => h.startsWith("#/me/video") },
 ];
 
 function useHash() {
@@ -47,10 +52,15 @@ function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: str
   const [title, page] = pid ? ["Patient monitoring", <PatientMonitor key={pid} pid={pid} />]
     : hash.startsWith("#/doctor/patients") ? ["Patient directory", <PatientDirectory />]
       : hash.startsWith("#/doctor/alerts") ? ["Alerts", <AlertsPage />]
-        : ["Dashboard", <DoctorDashboard />];
+        : hash.startsWith("#/doctor/data") ? ["Data Management", <DataManagement />]
+          : hash.startsWith("#/doctor/video") ? ["Video Consultation", <VideoConsultation role="doctor" />]
+            : ["Dashboard", <DoctorDashboard />];
+  // The notification listener and toasts live in the portal shell, so they persist across page navigation.
   return (
-    <Shell portal="Doctor Portal" user={user} nav={DOCTOR_NAV} hash={hash} title={title as string} status={status} onSignOut={onSignOut}
-      subtitle="Personalized post-discharge patient monitoring">{page}</Shell>
+    <NotificationProvider>
+      <Shell portal="Doctor Portal" user={user} nav={DOCTOR_NAV} hash={hash} title={title as string} status={status} onSignOut={onSignOut}
+        subtitle="Personalized post-discharge patient monitoring" headerRight={<NotificationBell />}>{page}</Shell>
+    </NotificationProvider>
   );
 }
 
@@ -60,6 +70,7 @@ function PatientPortal({ user, hash, status, onSignOut }: { user: User; hash: st
   const [title, page] = hash.startsWith("#/me/trends") ? ["My Health Trends", <MyTrends monitor={monitor} />]
     : hash.startsWith("#/me/records") ? ["My Medical Records", <MyRecords pid={pid} />]
       : hash.startsWith("#/me/profile") ? ["My Profile", <MyProfile user={user} pid={pid} monitor={monitor} />]
+        : hash.startsWith("#/me/video") ? ["Video Consultation", <VideoConsultation role="patient" />]
         : ["My Health", <MyHealth user={user} monitor={monitor} live={live} />];
   return (
     <Shell portal="Patient Portal" user={{ ...user, displayName: displayName(user.displayName) }} nav={PATIENT_NAV} hash={hash} title={title as string}

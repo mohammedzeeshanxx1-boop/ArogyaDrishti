@@ -1,7 +1,7 @@
 {
-  "ranAt": "2026-11-12T19:12:42.375548+00:00",
-  "finishedAt": "2026-11-12T19:16:56.122930+00:00",
-  "commit": "7090cc14636b2102fbd93864a72c71d4ae37b308",
+  "ranAt": "2026-11-12T20:10:04.297590+00:00",
+  "finishedAt": "2026-11-12T20:15:33.802886+00:00",
+  "commit": "359fd14e471ab9d4881819d8bd4906d01e551281",
   "command": "scripts/acceptance.py",
   "platform": "linux",
   "api": "http://localhost:8000",
@@ -14,7 +14,7 @@
     },
     "patients_8": {
       "status": "PASS",
-      "evidence": "8 patients via API, 8 via web proxy; 8/8 profiles complete with conditions and medications"
+      "evidence": "8 Synthea patients (8 complete with conditions and medications) + 12 registered in the Doctor Portal; 20 via API, 20 via web proxy"
     },
     "live_simulation": {
       "status": "PASS",
@@ -22,15 +22,15 @@
     },
     "levels_seen": {
       "status": "PASS",
-      "evidence": "NORMAL@2.1s \u2192 WATCH@7.6s \u2192 REVIEW@11.5s \u2192 URGENT@14.4s"
+      "evidence": "NORMAL@2.3s \u2192 WATCH@6.9s \u2192 REVIEW@11.7s \u2192 URGENT@15.0s"
     },
     "alert_events": {
       "status": "PASS",
-      "evidence": "9 alert events recorded server-side for this patient; recent sequence: WATCH \u2192 REVIEW \u2192 URGENT \u2192 WATCH \u2192 REVIEW \u2192 URGENT; e.g. \"NEWS2-style partial aggregate 8 (from 4 of 7 parameters; a single parameter scores 3).\""
+      "evidence": "15 alert events recorded server-side for this patient; recent sequence: WATCH \u2192 REVIEW \u2192 URGENT \u2192 WATCH \u2192 REVIEW \u2192 URGENT; e.g. \"NEWS2-style partial aggregate 8 (from 4 of 7 parameters; a single parameter scores 3).\""
     },
     "overview_status": {
       "status": "PASS",
-      "evidence": "overview: 8 patients; this patient URGENT / active"
+      "evidence": "overview: 20 patients; this patient URGENT / active"
     },
     "no_data_not_normal": {
       "status": "PASS",
@@ -42,7 +42,7 @@
     },
     "fhir_readback": {
       "status": "PASS",
-      "evidence": "Observation/84011: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0"
+      "evidence": "Observation/102825: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0"
     },
     "explanations": {
       "status": "PASS",
@@ -54,11 +54,11 @@
     },
     "websocket_updates": {
       "status": "PASS",
-      "evidence": "direct pushes [(1, 'URGENT', '2026-11-12T19:13:58.724451+00:00'), (2, 'URGENT', '2026-11-12T19:13:59.715867+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')]"
+      "evidence": "direct pushes [(1, 'URGENT', '2026-11-12T20:11:59.553229+00:00'), (2, 'URGENT', '2026-11-12T20:12:00.589551+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')]"
     },
     "scale2": {
       "status": "PASS",
-      "evidence": "SpO2 87.0%: Scale 1 score 3 \u2192 after FHIR Flag/84256 Scale 2 score 1 (total 10\u21928) \u2192 flag cleared, Scale 1"
+      "evidence": "SpO2 87.0%: Scale 1 score 3 \u2192 after FHIR Flag/103070 Scale 2 score 1 (total 10\u21928) \u2192 flag cleared, Scale 1"
     },
     "personal_baselines": {
       "status": "PASS",
@@ -78,7 +78,7 @@
     },
     "evidence_console": {
       "status": "PASS",
-      "evidence": "/api/evidence 200: R1 PASS, R2 PARTIAL, R3 PASS, R4 PARTIAL, R5 PASS, R6 PASS, R7 PASS; shows this run: True"
+      "evidence": "/api/evidence 200: R1 PASS, R2 PARTIAL, R3 FAIL, R4 PARTIAL, R5 PASS, R6 PASS, R7 PASS; shows this run: True"
     }
   }
 }

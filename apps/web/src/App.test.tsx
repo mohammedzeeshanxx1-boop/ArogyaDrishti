@@ -165,3 +165,71 @@ describe("Patient Portal", () => {
     await waitFor(() => expect(screen.getByTestId("patient-status")).toHaveTextContent("No recent readings"));
   });
 });
+
+// ---------------------------------------------------------------- Phase 2/3
+import { parseCsv } from "./pages/data";
+
+const ev = (id: number, level: string, extra: Record<string, unknown> = {}) => ({
+  id, patient_id: "p1", patientName: "Ariane Kirlin", created_at: now, measured_at: now, kind: "escalated", level, previous_level: "WATCH",
+  vital: null, value: 5, unit: "points", rule: null, reason: "x", observation: null, summary: `Escalated to ${level}: combined early-warning score 5.`,
+  read: false, acknowledgements: [], acknowledgedByMe: false, ...extra,
+});
+
+class ScriptedSocket {
+  static last: ScriptedSocket | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null; onclose: ((e: { code: number }) => void) | null = null; onerror: (() => void) | null = null;
+  readyState = 1;
+  url: string;
+  constructor(url: string) { this.url = url; if (url.includes("/ws/notifications")) ScriptedSocket.last = this; }
+  send(m: unknown) { this.onmessage?.({ data: JSON.stringify(m) }); }
+  close() {}
+}
+
+describe("Doctor notifications", () => {
+  it("pops up only events newer than the connection cursor, once each, on any doctor page", async () => {
+    window.location.hash = "#/doctor/alerts";
+    vi.stubGlobal("WebSocket", ScriptedSocket);
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor }, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
+    render(<App />);
+    await waitFor(() => expect(ScriptedSocket.last).not.toBeNull());
+    const ws = ScriptedSocket.last!;
+    // history at connect: shown in the bell, never as a pop-up
+    ws.send({ type: "hello", cursor: 10, latestId: 10, unread: 0, items: [ev(10, "URGENT", { read: true })] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryAllByTestId("toast")).toHaveLength(0);
+    ws.send({ type: "events", cursor: 12, unread: 2, items: [ev(11, "REVIEW"), ev(12, "URGENT")] });
+    await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(2));
+    ws.send({ type: "events", cursor: 12, unread: 2, items: [ev(12, "URGENT")] });   // repeated delivery
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getAllByTestId("toast")).toHaveLength(2);
+    const urgent = screen.getAllByTestId("toast").find((t) => t.getAttribute("data-level") === "URGENT")!;
+    expect(urgent).toHaveAttribute("role", "alert");
+    expect(within(urgent).getByTestId("toast-patient")).toHaveTextContent("Ariane Kirlin");
+    expect(screen.getByTestId("bell-count")).toHaveTextContent("2");
+    fireEvent.click(within(urgent).getByLabelText("Dismiss notification"));
+    expect(screen.getAllByTestId("toast")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("toast-view"));
+    expect(window.location.hash).toBe("#/doctor/patients/p1");
+  });
+});
+
+describe("Data management helpers", () => {
+  it("parses quoted CSV and reports malformed files", () => {
+    const r = parseCsv('﻿Name,birth_date,gender\r\n"O\'Neil, ""Jo""",1970-01-02,female\r\n');
+    expect(r.header).toEqual(["name", "birth_date", "gender"]);
+    expect(r.rows[0].name).toBe('O\'Neil, "Jo"');
+    expect(parseCsv("a,b\n1\n").error).toMatch(/Row 2 has 1 values/);
+    expect(parseCsv("").error).toMatch(/empty/);
+    expect(parseCsv('a\n"x').error).toMatch(/unclosed/);
+  });
+
+  it("opens SparkMeet in a new tab from both portals without patient details in the URL", async () => {
+    window.location.hash = "#/me/video";
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: patientUser }, "/api/demo/monitor/p1": monitor }));
+    render(<App />);
+    const a = await screen.findByTestId("video-patient");
+    expect(a).toHaveAttribute("href", "https://sparkmeet-web.onrender.com/");
+    expect(a).toHaveAttribute("target", "_blank");
+    expect(a).toHaveAttribute("rel", "noopener noreferrer");
+  });
+});

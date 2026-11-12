@@ -47,30 +47,53 @@ def _is_synthea(p: dict) -> bool:
     return any(i.get("system") == SYNTHEA_ID_SYSTEM for i in p.get("identifier", []))
 
 
+# Patients registered through the Doctor Portal (form or CSV import) carry this identifier system.
+PORTAL_ID_SYSTEM = "urn:arogya-drishti:patient"
+
+
+def _is_portal(p: dict) -> bool:
+    return any(i.get("system") == PORTAL_ID_SYSTEM for i in p.get("identifier", []))
+
+
+def record_source(p: dict) -> str:
+    """'synthea' (generated synthetic record) or the source tag of a portal-registered record."""
+    if _is_synthea(p):
+        return "synthea"
+    tag = next((t.get("code") for t in p.get("meta", {}).get("tag", []) if t.get("system") == "urn:arogya-drishti:source"), None)
+    return tag or "portal-entry"
+
+
+async def patient_summary(fhir: FhirClient, p: dict) -> dict:
+    """Directory entry for one patient (3 HAPI queries)."""
+    ref = f"Patient/{p['id']}"
+    last_imp, conds, meds = await asyncio.gather(
+        fhir.search("Encounter", {"subject": ref, "class": "IMP", "_sort": "-date", "_count": 1}, limit=1),
+        fhir.count("Condition", {"subject": ref, "clinical-status": "active"}),
+        fhir.count("MedicationRequest", {"subject": ref, "status": "active"}),
+    )
+    enc = last_imp[0] if last_imp else None
+    return {
+        "id": p["id"],
+        "name": _name(p),
+        "gender": p.get("gender"),
+        "birthDate": p.get("birthDate"),
+        "age": age(p.get("birthDate")),
+        "synthetic": True,
+        "source": record_source(p),
+        "lastDischarge": (enc or {}).get("period", {}).get("end"),
+        "activeConditions": conds,
+        "activeMedications": meds,
+    }
+
+
 async def list_patients(fhir: FhirClient) -> list[dict]:
-    patients = await fhir.search("Patient", {"identifier": f"{SYNTHEA_ID_SYSTEM}|", "_count": 100, "_sort": "_id"})
+    synthea, portal = await asyncio.gather(
+        fhir.search("Patient", {"identifier": f"{SYNTHEA_ID_SYSTEM}|", "_count": 100, "_sort": "_id"}),
+        fhir.search("Patient", {"identifier": f"{PORTAL_ID_SYSTEM}|", "_count": 200, "_sort": "_id"}, limit=2000),
+    )
+    patients = [p for p in synthea if _is_synthea(p)] + [p for p in portal if _is_portal(p) and not _is_synthea(p)]
 
-    async def summary(p: dict) -> dict:
-        ref = f"Patient/{p['id']}"
-        last_imp, conds, meds = await asyncio.gather(
-            fhir.search("Encounter", {"subject": ref, "class": "IMP", "_sort": "-date", "_count": 1}, limit=1),
-            fhir.count("Condition", {"subject": ref, "clinical-status": "active"}),
-            fhir.count("MedicationRequest", {"subject": ref, "status": "active"}),
-        )
-        enc = last_imp[0] if last_imp else None
-        return {
-            "id": p["id"],
-            "name": _name(p),
-            "gender": p.get("gender"),
-            "birthDate": p.get("birthDate"),
-            "age": age(p.get("birthDate")),
-            "synthetic": True,
-            "lastDischarge": (enc or {}).get("period", {}).get("end"),
-            "activeConditions": conds,
-            "activeMedications": meds,
-        }
-
-    return list(await asyncio.gather(*(summary(p) for p in patients if _is_synthea(p))))
+    return list(await asyncio.gather(*(patient_summary(fhir, p) for p in patients)))
 
 
 async def patient_profile(fhir: FhirClient, pid: str) -> dict | None:
@@ -125,6 +148,8 @@ async def patient_profile(fhir: FhirClient, pid: str) -> dict | None:
             "age": age(patient.get("birthDate")),
             "syntheaId": next((i.get("value") for i in patient.get("identifier", []) if i.get("system") == SYNTHEA_ID_SYSTEM), None),
             "synthetic": _is_synthea(patient),
+            "source": record_source(patient),
+            "telecom": [{"system": t.get("system"), "value": t.get("value")} for t in patient.get("telecom", []) if t.get("value")],
         },
         "discharge": discharge and {
             "encounter": f"Encounter/{discharge['id']}",
