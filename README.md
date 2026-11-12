@@ -28,7 +28,7 @@ App-only event metadata goes to SQLite on the `api` volume. FHIR resources are n
 
 Start the services (below), open http://localhost:5173 and pick a patient. The dashboard shows each discharged patient's monitoring status, latest vitals, risk level with reasons, alert history and SpO₂ scale. Patients without recent readings are shown as **Not assessed**.
 
-No monitoring source runs by default. To stream **simulated** readings for a patient: `scripts/dev/simulate.sh <patient-id> deterioration`. Developer tools (simulator, replay, evaluation, acceptance test) are described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+No monitoring source runs by default. To stream **simulated** readings, open a patient and use the **Live Simulation** panel (Stable Recovery or Gradual Deterioration; Start, Stop, Reset). Readings are labelled simulated, go through the normal FHIR ingestion pipeline and appear on the page as they arrive (one set every 2 s, 20 steps). Start and Reset show only the new run; earlier Observations stay in HAPI FHIR. The same source can be run from a terminal: `scripts/dev/simulate.sh <patient-id> deterioration`. Developer tools (simulator, replay, evaluation, acceptance test) are described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Run on localhost (development)
 

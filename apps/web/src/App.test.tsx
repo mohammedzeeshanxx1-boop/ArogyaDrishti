@@ -118,7 +118,7 @@ describe("clinician dashboard", () => {
     vi.stubGlobal("fetch", routeFetch({
       "/api/v1/status": status, "/api/monitoring/status": { ...source, status: "none", lastIngestionAt: null },
       "/api/patients/p1/profile": profile, "/api/alerts": { alerts: [] },
-      "/api/demo/monitor/p1": { ...monitor, observationCount: 0,
+      "/api/demo/monitor/p1": { ...monitor, observationCount: 0, windowStart: new Date(Date.now() - 3600_000).toISOString(),
         vitals: { heart_rate: empty, spo2: empty, respiratory_rate: empty, body_temperature: empty },
         risk: { ...monitor.risk, level: "NORMAL", alerts: [], news2: { ...monitor.risk.news2, total: 0, parameters: {} } },
         assessment: { ...monitor.assessment, assessable: false, level: null, monitoringStatus: "no_recent_data", trustedVitals: 0, sources: [] } },
@@ -128,5 +128,30 @@ describe("clinician dashboard", () => {
     expect(screen.queryByTestId("risk-level")).toBeNull();
     expect(screen.getByText(/No vital-sign readings received/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("status-source")).toHaveTextContent("No source connected"));
+  });
+
+  it("starts a simulation from the patient page and shows the waiting state for the new run", async () => {
+    window.location.hash = "#/patient/p1";
+    const empty = { label: "x", unit: "/min", series: [], latest: null };
+    const sim = { running: true, runId: "r1", patientId: "p1", scenario: "deterioration", scenarioLabel: "Gradual Deterioration",
+      step: 0, totalSteps: 20, intervalSeconds: 2, startedAt: now, finishedAt: null, stopped: false, accepted: 0, rejected: 0, lastError: null, lastObservationId: null };
+    const fetchMock = routeFetch({
+      "/api/v1/status": status, "/api/monitoring/status": source,
+      "/api/patients/p1/profile": profile, "/api/alerts": { alerts: [] },
+      "/api/demo/simulator/start": sim,
+      "/api/demo/monitor/p1": { ...monitor, observationCount: 0, windowStart: now, simulator: sim,
+        vitals: { heart_rate: empty, spo2: empty, respiratory_rate: empty, body_temperature: empty },
+        risk: { ...monitor.risk, level: "NORMAL", alerts: [], news2: { ...monitor.risk.news2, total: 0, parameters: {} } },
+        assessment: { ...monitor.assessment, assessable: false, level: null, monitoringStatus: "no_recent_data", trustedVitals: 0, sources: [] } },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("sim-status")).toHaveTextContent("Running"));
+    expect(screen.getByTestId("waiting")).toHaveTextContent("Waiting for readings");
+    expect(screen.getByTestId("sim-progress")).toHaveTextContent("step 0 of 20");
+    expect(screen.queryByTestId("risk-level")).toBeNull();
+    expect(screen.getByTestId("sim-start")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("sim-reset"));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([u]) => String(u).startsWith("/api/demo/reset"))).toBe(true));
   });
 });

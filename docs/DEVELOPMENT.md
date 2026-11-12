@@ -1,6 +1,6 @@
 # Development utilities
 
-The clinician dashboard contains no demo or test controls. These tools remain for development, verification and evaluation. They are API endpoints or scripts, not UI.
+The patient page has one simulation control, the **Live Simulation** panel (scenario, Start, Stop, Reset, progress, status), which drives the simulator endpoints below. Everything else here is an API endpoint or script, not UI.
 
 | Purpose | How |
 |---|---|
@@ -29,3 +29,5 @@ observation source (today: simulated, labelled in every Observation's device.dis
 - Data older than `MONITOR_STALE_MINUTES` (default 15) is marked stale.
 - No physical device integration exists; `/api/monitoring/status` always reports `physicalDevicesConnected: 0`.
 - No simulator starts automatically.
+- Start and Reset set a current-run view for the patient: the dashboard, the overview and the server-side assessment then use only readings from that run (never older than the 60-minute window), and the patient's last assessed level is cleared so the new run's alerts are raised afresh. Stored FHIR Observations and alert history are never deleted.
+- A 20-step run has too few readings to form a personal baseline (at least 20 older trusted readings per vital are needed), so the vital cards show "needs more readings"; baselines are exercised by the replay lab and unit tests.

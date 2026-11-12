@@ -31,6 +31,21 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## Live Simulation restored on the patient page (2026-11-12, branch localhost-dev)
+
+Patient page order: patient information → Live Simulation (scenario, Start, Stop, Reset, progress bar, status Idle/Running/Completed/Stopped/Error) → four live vital cards with trend charts → risk assessment → alert history → SpO₂ Scale 2 configuration. Uses the existing simulator endpoints (`/api/demo/simulator/start|stop`, `/api/demo/reset`) and the existing WebSocket with polling fallback.
+
+Stale-data fix (smallest change): the server-side assessment (`monitoring.recent_readings/assess`) and the overview now use the same current-run window as the monitor (set by Start/Reset; it narrows, never widens, the 60-minute window); Start/Reset clear the stored last level (`monitoring.reset_state`) so a new run raises alerts afresh; alert history and FHIR Observations are kept. The page drops WebSocket frames built for the previous view for up to 8 s after a click and shows "Waiting for readings" / "Not assessed" immediately. Thresholds, the safety floor, artifact suppression and baselines are unchanged.
+
+Verified (this Linux workspace):
+- API run on Alex Lang: deterioration 80/80 readings stored in HAPI (each `device.display` = simulated), levels NORMAL → WATCH → REVIEW → URGENT while running, alert events raised/escalated ×2; stable run NORMAL, Stop freezes progress; Reset shows 0 readings and no level; second deterioration run starts empty and repeats the same sequence.
+- Browser (headless Chrome, desktop): Reset/Start/Stop reflected within 0.4 s; vital values, timestamps and charts update every reading; levels NORMAL → WATCH → REVIEW → URGENT; alert history shows the new events; a run started without Reset shows nothing from the previous run; 0 console errors. Mobile 390 px: same level sequence, no horizontal overflow.
+- Tests: 123 backend unit tests (2 new), 6 web tests (1 new), type-check, build; `scripts/check.sh` ALL CHECKS PASSED; acceptance 17 PASS, 0 FAIL, 1 BLOCKED (BIDMC).
+
+Not verified here: macOS (no access to the user's Mac from this workspace).
+
+---
+
 ## Clinician-facing base prototype (2026-11-12, branch feature/clinical-dashboard)
 
 Checkpoint before changes: branch `checkpoint/pre-clinical-ui` (= main `4e0d637`).

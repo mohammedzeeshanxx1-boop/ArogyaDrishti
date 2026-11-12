@@ -66,3 +66,32 @@ def test_alert_transitions_raised_escalated_resolved(tmp_path):
     assert step([rd("heart_rate", 72, 1)], 5) is None                  # not assessable: no state change, no event
     events = monitoring.alert_events(db, "p1")
     assert [e["kind"] for e in events] == ["resolved", "escalated", "raised"]
+
+
+class _FakeFhir:
+    def __init__(self):
+        self.params = None
+
+    async def search(self, rtype, params, limit=None):
+        self.params = params
+        return []
+
+
+def test_new_run_window_narrows_but_never_widens_recent_window():
+    import asyncio
+    f = _FakeFhir()
+    asyncio.run(monitoring.recent_readings(f, "p1", NOW, since=NOW - timedelta(minutes=2)))
+    assert f.params["date"][0] == "ge2026-11-12T11:58:00Z"
+    asyncio.run(monitoring.recent_readings(f, "p1", NOW, since=NOW - timedelta(hours=5)))
+    assert f.params["date"][0] == "ge2026-11-12T11:00:00Z"
+
+
+def test_reset_state_starts_new_run_unassessed_but_keeps_alert_history(tmp_path):
+    db = str(tmp_path / "m.db"); init_db(db); monitoring.init(db)
+    r = full(hr=135, spo2=88, rr=28, temp=39.2)
+    risk = detector.evaluate(r)
+    assert monitoring.record_transition(db, "p1", risk, monitoring.summarize(r, risk, NOW), "personalized", NOW)
+    monitoring.reset_state(db, "p1")
+    ev = monitoring.record_transition(db, "p1", risk, monitoring.summarize(r, risk, NOW), "personalized", NOW)
+    assert ev and ev["kind"] == "raised"          # raised again in the new run, not a duplicate-suppressed no-op
+    assert len(monitoring.alert_events(db, "p1")) == 2

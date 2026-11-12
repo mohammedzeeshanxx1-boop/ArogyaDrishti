@@ -98,6 +98,13 @@ export interface Monitor {
   };
   assessment: PatientMonitoring;
   scale2?: Scale2Status;
+  simulator?: SimulatorState | null;
+}
+
+export interface SimulatorState {
+  running: boolean; runId: string | null; patientId: string | null; scenario: string | null; scenarioLabel: string | null;
+  step: number; totalSteps: number; intervalSeconds: number; startedAt: string | null; finishedAt: string | null;
+  stopped: boolean; accepted: number; rejected: number; lastError: string | null; lastObservationId: string | null;
 }
 
 export interface AlertEvent {
@@ -141,3 +148,13 @@ export const setScale2 = (pid: string, prescribedBy: string, reason: string) =>
 export const clearScale2 = (pid: string) => getJson<Scale2Status>(`/api/patients/${enc(pid)}/scale2`, { method: "DELETE" });
 export const monitorSocketUrl = (pid: string) =>
   `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/monitor/${enc(pid)}?mode=personalized`;
+
+// Simulated monitoring source (development and demonstration). Readings go through the normal ingestion pipeline.
+export const SCENARIOS = [
+  { id: "stable", label: "Stable Recovery" },
+  { id: "deterioration", label: "Gradual Deterioration" },
+] as const;
+export const fetchSimulator = () => getJson<SimulatorState>("/api/demo/simulator");
+export const startSimulation = (patientId: string, scenario: string) => getJson<SimulatorState>("/api/demo/simulator/start", post({ patientId, scenario }));
+export const stopSimulation = () => getJson<SimulatorState>("/api/demo/simulator/stop", post({}));
+export const resetSimulation = (patientId: string) => getJson<{ windowStart: string; simulator: SimulatorState }>("/api/demo/reset", post({ patientId }));

@@ -5,6 +5,7 @@ import {
   type AlertEvent, type Monitor, type PatientProfile, type Scale2Status, type VitalKey,
 } from "../api";
 import { AlertList } from "./AlertList";
+import { SimulationPanel } from "./SimulationPanel";
 import { Card, Empty, ErrorNote, LevelBadge, MonitoringBadge, VITAL_META, ago, displayName, fmtDate, fmtDateTime, fmtTime, tidyCondition } from "./ui";
 
 const POLL_MS = 3000;
@@ -18,9 +19,25 @@ function useMonitor(pid: string, onUpdate: () => void) {
   const [error, setError] = useState<string | null>(null);
   const liveRef = useRef(live);
   liveRef.current = live;
+  // After Start/Reset, frames built for the previous view (e.g. a WebSocket frame computed just before the click)
+  // are dropped until the new view arrives. The guard expires, so a restarted API can never freeze the page.
+  const guard = useRef<{ view: string; until: number }>({ view: "", until: 0 });
+  const [pending, setPending] = useState<string | null>(null);
+  const accept = useCallback((m: Monitor) => {
+    const g = guard.current;
+    if (Date.now() < g.until) {
+      if (m.windowStart < g.view) return;
+      guard.current = { view: "", until: 0 }; setPending(null);
+    }
+    setMonitor(m);
+  }, []);
+  const markView = useCallback((windowStart: string) => {
+    guard.current = { view: windowStart, until: Date.now() + 8000 }; setPending(windowStart);
+    window.setTimeout(() => { if (guard.current.view === windowStart) { guard.current = { view: "", until: 0 }; setPending(null); } }, 8000);
+  }, []);
 
   const poll = useCallback(async () => {
-    try { setMonitor(await fetchMonitor(pid)); setError(null); onUpdate(); }
+    try { accept(await fetchMonitor(pid)); setError(null); onUpdate(); }
     catch (e: any) { setError(String(e?.message ?? e)); }
   }, [pid, onUpdate]);
 
@@ -28,6 +45,7 @@ function useMonitor(pid: string, onUpdate: () => void) {
     let alive = true;
     let timer: number | undefined;
     let ws: WebSocket | null = null;
+    guard.current = { view: "", until: 0 }; setPending(null);
     setLive("connecting");
     const startPolling = () => {
       if (!alive || timer) return;
@@ -40,7 +58,7 @@ function useMonitor(pid: string, onUpdate: () => void) {
         try {
           const m = JSON.parse(String(e.data));
           if (m.type === "monitor" && alive) {
-            setMonitor(m.data); setError(null); setLive("websocket"); onUpdate();
+            accept(m.data); setError(null); setLive("websocket"); onUpdate();
             if (timer) { window.clearInterval(timer); timer = undefined; }
           }
         } catch { /* ignore malformed frames */ }
@@ -53,7 +71,7 @@ function useMonitor(pid: string, onUpdate: () => void) {
     return () => { alive = false; window.clearTimeout(watchdog); if (timer) window.clearInterval(timer); ws?.close(); };
   }, [pid, poll]);
 
-  return { monitor, live, error, refresh: poll };
+  return { monitor, live, error, refresh: poll, markView, pending: pending !== null, viewStart: pending ?? monitor?.windowStart };
 }
 
 function VitalCard({ k, monitor }: { k: VitalKey; monitor: Monitor }) {
@@ -205,7 +223,12 @@ export function PatientDetail({ pid, onUpdate }: { pid: string; onUpdate: () => 
   const [profile, setProfile] = useState<PatientProfile | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertEvent[] | null>(null);
-  const { monitor, live, error, refresh } = useMonitor(pid, onUpdate);
+  const { monitor, live, error, refresh, markView, pending, viewStart } = useMonitor(pid, onUpdate);
+  const simRunning = !!monitor?.simulator?.running;
+  const [alertsTick, setAlertsTick] = useState(0);
+  const afterSimAction = useCallback(() => { void refresh(); setAlertsTick((n) => n + 1); }, [refresh]);
+  const windowMin = monitor ? Math.round((Date.parse(monitor.evaluatedAt) - Date.parse(monitor.windowStart)) / 60000) : 0;
+  const currentRun = pending || (!!monitor && windowMin < (monitor.assessment.recentWindowMinutes ?? 60) - 1);
 
   useEffect(() => {
     setProfile(null); setProfileError(null);
@@ -215,16 +238,16 @@ export function PatientDetail({ pid, onUpdate }: { pid: string; onUpdate: () => 
     let alive = true;
     const load = () => fetchAlerts(pid, 50).then((a) => alive && setAlerts(a.alerts)).catch(() => alive && setAlerts([]));
     void load();
-    const t = window.setInterval(load, 10000);
+    const t = window.setInterval(load, simRunning ? 2000 : 10000);
     return () => { alive = false; window.clearInterval(t); };
-  }, [pid]);
+  }, [pid, simRunning, alertsTick]);
 
   const conditions = [...(profile?.activeConditions ?? [])].sort((a, b) => Number(!/\(disorder\)/.test(a.condition ?? "")) - Number(!/\(disorder\)/.test(b.condition ?? "")));
   return (
     <div className="space-y-5">
       <a href="#/" className="text-sm font-medium text-teal-700 hover:underline">← All patients</a>
       {profileError && <ErrorNote>Could not load the patient record: {profileError}</ErrorNote>}
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div>
         <Card>
           {!profile ? <p className="text-sm text-navy-500">Loading patient record…</p> : (
             <div>
@@ -261,28 +284,42 @@ export function PatientDetail({ pid, onUpdate }: { pid: string; onUpdate: () => 
             </div>
           )}
         </Card>
-        {monitor ? <RiskAssessment monitor={monitor} /> : <Card title="Risk assessment">{error ? <ErrorNote>{error}</ErrorNote> : <p className="text-sm text-navy-500">Loading monitoring data…</p>}</Card>}
       </div>
+
+      <SimulationPanel pid={pid} sim={monitor?.simulator} windowStart={viewStart} onNewView={markView} onChange={afterSimAction} />
 
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-navy-900">Vital signs</h2>
+          <h2 className="text-sm font-semibold text-navy-900">Vital signs {currentRun && monitor ? <span className="font-normal text-navy-500">· current run since {fmtTime(viewStart)}</span> : null}</h2>
           <span data-testid="live-mode" className="text-xs text-navy-500">
             {live === "websocket" ? "● Live updates" : live === "polling" ? "● Updating every few seconds" : "Connecting…"}
             {monitor?.assessment.sources?.length ? ` · source: ${monitor.assessment.sources.join(", ")}` : ""}
           </span>
         </div>
         {monitor ? (
-          monitor.observationCount === 0
-            ? <Empty>No vital-sign readings received for this patient in the last {monitor.assessment.recentWindowMinutes} minutes. No monitoring source is currently delivering data for this patient.</Empty>
+          pending || monitor.observationCount === 0
+            ? <Empty>
+                {pending
+                  ? <span data-testid="waiting">Waiting for readings from the new run…</span>
+                  : monitor.simulator?.running
+                  ? <span data-testid="waiting">Waiting for readings… the simulated source has started; the first readings appear within a few seconds.</span>
+                  : currentRun
+                    ? <span data-testid="waiting">Waiting for readings. The view was reset at {fmtTime(monitor.windowStart)}; no readings have arrived since. Start a simulation or connect a monitoring source.</span>
+                    : <>No vital-sign readings received for this patient in the last {monitor.assessment.recentWindowMinutes} minutes. No monitoring source is currently delivering data for this patient.</>}
+              </Empty>
             : <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{ORDER.map((k) => <VitalCard key={k} k={k} monitor={monitor} />)}</div>
         ) : null}
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <Card title="Alert history"><AlertList alerts={alerts} /></Card>
-        <Scale2Panel pid={pid} status={monitor?.scale2} onChange={() => void refresh()} />
-      </div>
+      {monitor && !pending ? <RiskAssessment monitor={monitor} /> : (
+        <Card title="Risk assessment">
+          {pending ? <p data-testid="risk-not-assessed" className="text-sm text-navy-700">Not assessed: waiting for readings from the new run.</p>
+            : error ? <ErrorNote>{error}</ErrorNote> : <p className="text-sm text-navy-500">Loading monitoring data…</p>}
+        </Card>
+      )}
+
+      <Card title="Alert history"><AlertList alerts={alerts} /></Card>
+      <Scale2Panel pid={pid} status={monitor?.scale2} onChange={() => void refresh()} />
     </div>
   );
 }

@@ -92,6 +92,16 @@ class ReplayCreate(BaseModel):
     batchSize: int = Field(200, ge=1, le=1000)
 
 
+def window_since(app_, pid: str) -> datetime | None:
+    """Start of the current-run view for a patient (set by simulator start / reset / replay), or None."""
+    w = getattr(app_.state, "windows", {}).get(pid)
+    return datetime.fromisoformat(w["since"].replace("Z", "+00:00")) if w and not w.get("session") else None
+
+
+def overview_cache_clear(app_) -> None:
+    app_.state.overview_cache = None
+
+
 def _z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -114,7 +124,7 @@ def create_app(
         app.state.simulator = Simulator(app.state.sim_client)
         app.state.windows = {}  # patientId -> {"since": UTC Z, "session": replay session id or None}
         monitoring.init(settings.sqlite_path)
-        app.state.assessor = monitoring.Assessor(app.state.fhir, settings.sqlite_path)
+        app.state.assessor = monitoring.Assessor(app.state.fhir, settings.sqlite_path, since_for=lambda pid: window_since(app, pid))
         async def _warm():
             try:
                 await cached_patients(app)
@@ -244,6 +254,8 @@ def create_app(
             return fhir_error(409, "conflict", f"replay session {active.id} is {active.state}; stop it first")
         state = await request.app.state.simulator.start(body.patientId, body.scenario, body.steps, body.intervalSeconds)
         request.app.state.windows[body.patientId] = {"since": _z(datetime.fromisoformat(state["startedAt"])), "session": None}
+        monitoring.reset_state(settings.sqlite_path, body.patientId)
+        overview_cache_clear(request.app)
         return state
 
     @app.post("/api/demo/simulator/stop")
@@ -256,12 +268,16 @@ def create_app(
             return fhir_error(400, "invalid", "patientId must be a FHIR id")
         state = await request.app.state.simulator.stop()
         request.app.state.windows[body.patientId] = {"since": _z(datetime.now(timezone.utc)), "session": None}
+        monitoring.reset_state(settings.sqlite_path, body.patientId)
+        overview_cache_clear(request.app)
         return {"patientId": body.patientId, "windowStart": request.app.state.windows[body.patientId]["since"], "simulator": state}
 
     async def build_monitor(app_: FastAPI, pid: str, mode: str) -> dict:
         """Everything the dashboard shows for one patient, computed from observations stored in HAPI."""
         view = app_.state.windows.get(pid) or {"since": _z(datetime.now(timezone.utc) - timedelta(minutes=monitoring.RECENT_MINUTES)), "session": None}
         window = view["since"]
+        if not view["session"]:   # a current-run view narrows the recent window; it never shows readings older than it
+            window = max(window, _z(datetime.now(timezone.utc) - timedelta(minutes=monitoring.RECENT_MINUTES)))
         params = {
             "subject": f"Patient/{pid}",
             # A replay view shows only that session's Observations (measurement times may overlap other runs).
@@ -373,7 +389,7 @@ def create_app(
         async def one(p):
             async with sem:
                 try:
-                    a = await monitoring.assess(fhir(request), settings.sqlite_path, p["id"], record=False, now=now)
+                    a = await monitoring.assess(fhir(request), settings.sqlite_path, p["id"], record=False, now=now, since=window_since(request.app, p["id"]))
                 except FhirUnavailable as exc:
                     a = {"assessable": False, "level": None, "monitoringStatus": "unavailable", "error": str(exc), "latest": {}}
                 return {**p, "monitoring": a}
