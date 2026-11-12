@@ -18,6 +18,10 @@ class Settings:
     cors_origins: tuple[str, ...]
     fhir_request_timeout_seconds: float = 60.0  # reads, $validate, writes
     simulator_api_url: str = "http://localhost:8000"  # where the simulator POSTs observations
+    # Sign-in and per-patient authorization. On for the real server (AUTH_REQUIRED, default true);
+    # off only for Settings built directly in unit tests.
+    auth_required: bool = False
+    cookie_secure: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -29,4 +33,6 @@ class Settings:
             cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
             fhir_request_timeout_seconds=float(os.environ.get("FHIR_REQUEST_TIMEOUT_SECONDS", "60")),
             simulator_api_url=os.environ.get("SIMULATOR_API_URL", f"http://localhost:{os.environ.get('API_PORT', '8000')}"),
+            auth_required=os.environ.get("AUTH_REQUIRED", "true").strip().lower() not in ("0", "false", "no", "off"),
+            cookie_secure=os.environ.get("COOKIE_SECURE", "false").strip().lower() in ("1", "true", "yes", "on"),
         )

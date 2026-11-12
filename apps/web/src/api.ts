@@ -98,6 +98,14 @@ export interface Monitor {
   };
   assessment: PatientMonitoring;
   scale2?: Scale2Status;
+  simulator?: SimulatorState | null;
+  fhirProof?: { observation: string; id: string; versionId?: string; lastUpdated?: string; readBackMatches: boolean | null } | null;
+}
+
+export interface SimulatorState {
+  running: boolean; runId: string | null; patientId: string | null; scenario: string | null; scenarioLabel: string | null;
+  step: number; totalSteps: number; intervalSeconds: number; startedAt: string | null; finishedAt: string | null;
+  stopped: boolean; accepted: number; rejected: number; lastError: string | null; lastObservationId: string | null;
 }
 
 export interface AlertEvent {
@@ -116,18 +124,32 @@ export interface AlertEvent {
   observation: string | null;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
+
+// Called when the server says the session is missing or expired (HTTP 401), so the app can show sign-in.
+let onUnauthorized: (() => void) | null = null;
+export const setUnauthorizedHandler = (fn: (() => void) | null) => { onUnauthorized = fn; };
+
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(url, init);
+  const resp = await fetch(url, { credentials: "same-origin", ...init });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     const msg = body?.issue?.[0]?.diagnostics ?? body?.detail ?? `HTTP ${resp.status}`;
-    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    if (resp.status === 401 && !url.startsWith("/api/auth/")) onUnauthorized?.();
+    throw new ApiError(typeof msg === "string" ? msg : JSON.stringify(msg), resp.status);
   }
   return body as T;
 }
 
 const post = (body: unknown): RequestInit => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const enc = encodeURIComponent;
+
+export interface User { username: string; role: "doctor" | "patient"; patientId: string | null; displayName: string }
+export const fetchMe = () => getJson<{ authRequired: boolean; user: User | null }>("/api/auth/me");
+export const login = (username: string, password: string) => getJson<{ user: User }>("/api/auth/login", post({ username, password }));
+export const logout = () => getJson<{ signedOut: boolean }>("/api/auth/logout", post({}));
 
 export const fetchStatus = () => getJson<StatusResponse>("/api/v1/status");
 export const fetchMonitoringStatus = () => getJson<MonitoringSourceStatus>("/api/monitoring/status");
@@ -141,3 +163,13 @@ export const setScale2 = (pid: string, prescribedBy: string, reason: string) =>
 export const clearScale2 = (pid: string) => getJson<Scale2Status>(`/api/patients/${enc(pid)}/scale2`, { method: "DELETE" });
 export const monitorSocketUrl = (pid: string) =>
   `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/monitor/${enc(pid)}?mode=personalized`;
+
+// Simulated monitoring source (development and demonstration). Readings go through the normal ingestion pipeline.
+export const SCENARIOS = [
+  { id: "stable", label: "Stable Recovery" },
+  { id: "deterioration", label: "Gradual Deterioration" },
+] as const;
+export const fetchSimulator = () => getJson<SimulatorState>("/api/demo/simulator");
+export const startSimulation = (patientId: string, scenario: string) => getJson<SimulatorState>("/api/demo/simulator/start", post({ patientId, scenario }));
+export const stopSimulation = () => getJson<SimulatorState>("/api/demo/simulator/stop", post({}));
+export const resetSimulation = (patientId: string) => getJson<{ windowStart: string; simulator: SimulatorState }>("/api/demo/reset", post({ patientId }));

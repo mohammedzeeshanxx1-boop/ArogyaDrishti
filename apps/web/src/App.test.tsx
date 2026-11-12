@@ -39,94 +39,129 @@ const monitor = {
   scale2: { patientId: "p1", scale: 1, eligible: false, rule: "", flag: null, supportingConditions: [] },
 };
 
+const doctor = { username: "doctor", role: "doctor", patientId: null, displayName: "Demo clinician" };
+const patientUser = { username: "ariane.kirlin", role: "patient", patientId: "p1", displayName: "Ariane Kirlin" };
+
+/** Routes by URL prefix; a value of {__status, body} answers with that HTTP status. */
 function routeFetch(map: Record<string, unknown>) {
   return vi.fn(async (url: string) => {
-    const key = Object.keys(map).find((k) => url.startsWith(k));
+    const key = Object.keys(map).filter((k) => url.startsWith(k)).sort((a, b) => b.length - a.length)[0];
     if (!key) return { ok: false, status: 404, json: async () => ({}) };
-    return { ok: true, status: 200, json: async () => map[key] };
+    const v: any = map[key];
+    if (v && typeof v === "object" && "__status" in v) return { ok: v.__status < 400, status: v.__status, json: async () => v.body };
+    return { ok: true, status: 200, json: async () => v };
   });
 }
 
 class FailingSocket {
-  onmessage: unknown = null; onerror: (() => void) | null = null; onclose: (() => void) | null = null;
-  constructor() { setTimeout(() => this.onerror?.(), 0); }
+  onmessage: unknown = null; onerror: (() => void) | null = null; onclose: ((e: { code: number }) => void) | null = null;
+  readyState = 0;
+  constructor() { setTimeout(() => { this.onerror?.(); this.onclose?.({ code: 1006 }); }, 0); }
   close() {}
 }
 
-const DEMO_WORDS = /judge|demonstrate|replay|evaluation|round 1|seed|fingerprint|acceptance/i;
+const DEMO_WORDS = /judge|replay|evaluation|round 1|seed|fingerprint|acceptance/i;
+const common = { "/api/v1/status": status, "/api/monitoring/status": source };
 
 beforeEach(() => { window.location.hash = ""; vi.stubGlobal("WebSocket", FailingSocket); });
 afterEach(() => vi.unstubAllGlobals());
 
-describe("clinician dashboard", () => {
-  it("shows brand, subtitle and disclosures even when the backend is down", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+describe("portal access", () => {
+  it("shows the sign-in page with brand and disclaimer when not signed in", async () => {
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: null } }));
     render(<App />);
-    expect(screen.getByRole("heading", { level: 1, name: "AROGYA DRISHTI" })).toBeInTheDocument();
-    expect(screen.getByText("Personalized Post-Discharge Patient Monitoring")).toBeInTheDocument();
-    expect(screen.getByRole("note")).toHaveTextContent(/Clinical decision support only.*synthetic patients.*not clinically validated/);
-    await waitFor(() => expect(screen.getByTestId("status-api")).toHaveTextContent("Unreachable"));
+    expect(await screen.findByTestId("sign-in")).toBeInTheDocument();
+    expect(screen.getAllByText(/AROGYA DRISHTI/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Not for medical diagnosis/)).toBeInTheDocument();
+    expect(screen.queryByTestId("patient-row")).toBeNull();
   });
 
-  it("lists patients from the API and never shows NORMAL without data", async () => {
-    vi.stubGlobal("fetch", routeFetch({ "/api/v1/status": status, "/api/monitoring/status": source, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
+  it("shows the server's error for a wrong password", async () => {
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: null },
+      "/api/auth/login": { __status: 401, body: { issue: [{ diagnostics: "Incorrect username or password." }] } } }));
     render(<App />);
-    const cards = await screen.findAllByTestId("patient-card");
-    expect(cards).toHaveLength(2);
-    expect(within(cards[0]).getByText("Ariane Kirlin")).toBeInTheDocument();
-    expect(within(cards[0]).getByText("URGENT")).toBeInTheDocument();
-    expect(within(cards[1]).getByText("Not assessed")).toBeInTheDocument();
-    expect(within(cards[1]).getByText("No recent data")).toBeInTheDocument();
-    expect(within(cards[1]).queryByText("NORMAL")).toBeNull();
-    await waitFor(() => expect(screen.getByTestId("status-fhir")).toHaveTextContent("Connected (R4 4.0.1)"));
-    expect(screen.getByTestId("status-source")).toHaveTextContent("simulated source");
+    fireEvent.change(await screen.findByTestId("username"), { target: { value: "doctor" } });
+    fireEvent.change(screen.getByTestId("password"), { target: { value: "x" } });
+    fireEvent.click(screen.getByTestId("sign-in"));
+    expect(await screen.findByTestId("login-error")).toHaveTextContent("Incorrect username or password.");
+  });
+
+  it("returns to sign-in when the session expires (HTTP 401)", async () => {
+    window.location.hash = "#/doctor";
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor },
+      "/api/clinical/overview": { __status: 401, body: { issue: [{ diagnostics: "Sign in required." }] } }, "/api/alerts": { alerts: [] } }));
+    render(<App />);
+    expect(await screen.findByText(/Your session has ended/)).toBeInTheDocument();
+  });
+});
+
+describe("Doctor Portal", () => {
+  it("derives dashboard statistics from the overview and never shows NORMAL without data", async () => {
+    window.location.hash = "#/doctor";
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor }, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("stat-total-value")).toHaveTextContent("2"));
+    expect(screen.getByTestId("stat-monitored-value")).toHaveTextContent("1");
+    expect(screen.getByTestId("stat-urgent-value")).toHaveTextContent("1");
+    expect(screen.getByTestId("stat-review-value")).toHaveTextContent("0");
+    expect(screen.getAllByTestId("attention-row")).toHaveLength(1);
     expect(document.body.textContent).not.toMatch(DEMO_WORDS);
   });
 
-  it("filters by risk and searches by name", async () => {
-    vi.stubGlobal("fetch", routeFetch({ "/api/v1/status": status, "/api/monitoring/status": source, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
+  it("searches, filters and sorts the patient directory", async () => {
+    window.location.hash = "#/doctor/patients";
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor }, "/api/clinical/overview": overview }));
     render(<App />);
-    await screen.findAllByTestId("patient-card");
-    fireEvent.click(screen.getByRole("button", { name: /Not assessed/ }));
-    expect(screen.getAllByTestId("patient-card")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: /^All$/ }));
-    fireEvent.change(screen.getByPlaceholderText("Search by name"), { target: { value: "victor" } });
-    expect(screen.getAllByTestId("patient-card")).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByTestId("patient-row")).toHaveLength(2));
+    const rows = screen.getAllByTestId("patient-row");
+    expect(within(rows[0]).getByText("Ariane Kirlin")).toBeInTheDocument();          // URGENT first
+    expect(within(rows[1]).getByText("Not assessed")).toBeInTheDocument();          // no data: not NORMAL
+    fireEvent.change(screen.getByTestId("search"), { target: { value: "victor" } });
+    expect(screen.getAllByTestId("patient-row")).toHaveLength(1);
+    fireEvent.change(screen.getByTestId("search"), { target: { value: "" } });
+    fireEvent.change(screen.getByTestId("filter"), { target: { value: "URGENT" } });
+    expect(screen.getAllByTestId("patient-row")).toHaveLength(1);
+    expect(screen.getByTestId("result-count")).toHaveTextContent("1 of 2 patients");
   });
 
-  it("shows the patient detail with risk reasons, baseline and polling fallback", async () => {
-    window.location.hash = "#/patient/p1";
-    vi.stubGlobal("fetch", routeFetch({
-      "/api/v1/status": status, "/api/monitoring/status": source, "/api/patients/p1/profile": profile,
-      "/api/demo/monitor/p1": monitor, "/api/alerts": { alerts: [] },
-    }));
+  it("shows the monitoring page with vitals, plain-language risk and hidden technical details", async () => {
+    window.location.hash = "#/doctor/patients/p1";
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor },
+      "/api/patients/p1/profile": profile, "/api/alerts": { alerts: [] }, "/api/demo/monitor/p1": monitor }));
     render(<App />);
     await waitFor(() => expect(screen.getByTestId("patient-name")).toHaveTextContent("Ariane Kirlin"));
-    expect(screen.getByText("Ischemic heart disease")).toBeInTheDocument();
-    expect(screen.getByText(/clopidogrel/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId("risk-level")).toHaveTextContent("URGENT"));
-    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("NEWS2-style partial aggregate 11.");
-    expect(screen.getByText(/Partial NEWS2-style score/)).toBeInTheDocument();
-    expect(screen.getByTestId("vital-heart_rate")).toHaveTextContent("Personal baseline 76 /min (+58)");
+    await waitFor(() => expect(screen.getByTestId("value-heart_rate")).toHaveTextContent("134bpm"));
+    expect(screen.getByTestId("vital-respiratory_rate")).toHaveTextContent("No trusted reading in this period");
+    expect(screen.getByTestId("risk-level")).toHaveTextContent("URGENT");
+    expect(screen.getByTestId("risk-headline")).toHaveTextContent(/urgent clinical review/);
+    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("Combined early-warning score 11");
+    expect((screen.getByTestId("technical-details") as HTMLDetailsElement).open).toBe(false);
+    expect(screen.getByTestId("sim-start")).toBeInTheDocument();
+    expect(screen.getByText(/Demo \/ Simulation/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("live-mode")).toHaveTextContent("Updating every few seconds"));
-    expect(document.body.textContent).not.toMatch(DEMO_WORDS);
+  });
+});
+
+describe("Patient Portal", () => {
+  it("shows only the signed-in patient's portal and redirects away from doctor pages", async () => {
+    window.location.hash = "#/doctor";
+    const fetchMock = routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: patientUser }, "/api/demo/monitor/p1": monitor, "/api/patients/p1/profile": profile });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await waitFor(() => expect(window.location.hash).toBe("#/me"));
+    expect(await screen.findByTestId("greeting")).toHaveTextContent("Ariane");
+    await waitFor(() => expect(screen.getByTestId("patient-status")).toHaveTextContent("flagged as urgent"));
+    expect(screen.queryByText("Patients")).toBeNull();
+    const urls = fetchMock.mock.calls.map(([u]) => String(u));
+    expect(urls.some((u) => u.startsWith("/api/clinical/overview") || u.startsWith("/api/alerts") || u.startsWith("/api/monitoring/status"))).toBe(false);
+    expect(urls.filter((u) => u.includes("/p")).every((u) => u.includes("/p1"))).toBe(true);
   });
 
-  it("shows an honest empty state when a patient has no readings", async () => {
-    window.location.hash = "#/patient/p1";
-    const empty = { label: "x", unit: "/min", series: [], latest: null };
-    vi.stubGlobal("fetch", routeFetch({
-      "/api/v1/status": status, "/api/monitoring/status": { ...source, status: "none", lastIngestionAt: null },
-      "/api/patients/p1/profile": profile, "/api/alerts": { alerts: [] },
-      "/api/demo/monitor/p1": { ...monitor, observationCount: 0,
-        vitals: { heart_rate: empty, spo2: empty, respiratory_rate: empty, body_temperature: empty },
-        risk: { ...monitor.risk, level: "NORMAL", alerts: [], news2: { ...monitor.risk.news2, total: 0, parameters: {} } },
-        assessment: { ...monitor.assessment, assessable: false, level: null, monitoringStatus: "no_recent_data", trustedVitals: 0, sources: [] } },
-    }));
+  it("explains missing data plainly instead of showing a status", async () => {
+    window.location.hash = "#/me";
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: patientUser },
+      "/api/demo/monitor/p1": { ...monitor, observationCount: 0, assessment: { ...monitor.assessment, assessable: false, level: null, monitoringStatus: "no_recent_data", trustedVitals: 0 } } }));
     render(<App />);
-    await waitFor(() => expect(screen.getByTestId("risk-not-assessed")).toHaveTextContent("Risk is not assessed without data"));
-    expect(screen.queryByTestId("risk-level")).toBeNull();
-    expect(screen.getByText(/No vital-sign readings received/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId("status-source")).toHaveTextContent("No source connected"));
+    await waitFor(() => expect(screen.getByTestId("patient-status")).toHaveTextContent("No recent readings"));
   });
 });

@@ -68,12 +68,15 @@ def _parse(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-async def recent_readings(fhir: FhirClient, pid: str, now: datetime, minutes: int = RECENT_MINUTES) -> list[dict]:
+async def recent_readings(fhir: FhirClient, pid: str, now: datetime, minutes: int = RECENT_MINUTES,
+                          since: datetime | None = None) -> list[dict]:
+    # `since` (start of the current simulation / reset) narrows the window; it never widens it.
+    start = max(now - timedelta(minutes=minutes), since) if since else now - timedelta(minutes=minutes)
     # Only subject + date go to HAPI: on HAPI 5.7/H2 adding code or _tag filters made this query
     # 4-17x slower (measured 0.16-0.32 s vs 0.7-2.9 s). LOINC code and ingestion tag are checked here.
     params = {
         "subject": f"Patient/{pid}",
-        "date": [f"ge{_z(now - timedelta(minutes=minutes))}", f"le{_z(now + timedelta(minutes=5))}"],
+        "date": [f"ge{_z(start)}", f"le{_z(now + timedelta(minutes=5))}"],
         "_sort": "-date",
         "_count": 200,
     }
@@ -166,10 +169,16 @@ def alert_events(db_path: str, pid: str | None = None, limit: int = 50) -> list[
         return [dict(r) for r in rows.fetchall()]
 
 
+def reset_state(db_path: str, pid: str) -> None:
+    """Forget the last assessed level (a new run starts unassessed). Alert history is kept."""
+    with connect(db_path) as c:
+        c.execute("DELETE FROM patient_risk_state WHERE patient_id = ?", (pid,))
+
+
 async def assess(fhir: FhirClient, db_path: str, pid: str, mode: str = "personalized", record: bool = True,
-                 now: datetime | None = None) -> dict:
+                 now: datetime | None = None, since: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
-    readings = await recent_readings(fhir, pid, now)
+    readings = await recent_readings(fhir, pid, now, since=since)
     eligible = await scale2.cached_eligible(fhir, pid)
     risk = detector.evaluate(readings, mode=mode, scale2=eligible)
     summary = summarize(readings, risk, now)
@@ -182,8 +191,9 @@ async def assess(fhir: FhirClient, db_path: str, pid: str, mode: str = "personal
 class Assessor:
     """Debounced per-patient re-assessment triggered by ingestion. Errors are kept, never raised."""
 
-    def __init__(self, fhir: FhirClient, db_path: str):
+    def __init__(self, fhir: FhirClient, db_path: str, since_for=None):
         self.fhir, self.db_path = fhir, db_path
+        self.since_for = since_for or (lambda pid: None)   # current-run window start per patient
         self._running: dict[str, asyncio.Task] = {}
         self._dirty: set[str] = set()
         self.last_error: str | None = None
@@ -199,7 +209,7 @@ class Assessor:
         while True:
             self._dirty.discard(pid)
             try:
-                await assess(self.fhir, self.db_path, pid)
+                await assess(self.fhir, self.db_path, pid, since=self.since_for(pid))
                 self.assessments += 1
             except Exception as exc:  # recorded for /api/monitoring/status
                 self.last_error = f"{type(exc).__name__}: {exc}"

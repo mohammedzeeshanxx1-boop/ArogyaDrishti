@@ -1,51 +1,107 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchMonitoringStatus, fetchStatus, type MonitoringSourceStatus, type StatusResponse } from "./api";
-import { BRAND } from "./brand";
-import { Header } from "./components/Header";
-import { Overview } from "./components/Overview";
-import { PatientDetail } from "./components/PatientDetail";
+import { fetchMe, fetchStatus, logout, setUnauthorizedHandler, type StatusResponse, type User } from "./api";
+import { IconBell, IconChart, IconFile, IconGrid, IconPulse, IconUser, IconUsers } from "./components/icons";
+import { Shell, type NavItem } from "./components/Shell";
+import { displayName } from "./components/ui";
+import { useMonitor } from "./monitor";
+import { AlertsPage, DoctorDashboard, PatientDirectory, PatientMonitor } from "./pages/doctor";
+import { Login } from "./pages/Login";
+import { MyHealth, MyProfile, MyRecords, MyTrends } from "./pages/patient";
 
-type Route = { page: "overview" } | { page: "patient"; id: string };
+const DOCTOR_NAV: NavItem[] = [
+  { href: "#/doctor", label: "Dashboard", icon: IconGrid, match: (h) => h === "#/doctor" || h === "#/doctor/" },
+  { href: "#/doctor/patients", label: "Patients", icon: IconUsers, match: (h) => h.startsWith("#/doctor/patients") },
+  { href: "#/doctor/alerts", label: "Alerts", icon: IconBell, match: (h) => h.startsWith("#/doctor/alerts") },
+];
+const PATIENT_NAV: NavItem[] = [
+  { href: "#/me", label: "My Health", icon: IconPulse, match: (h) => h === "#/me" || h === "#/me/" },
+  { href: "#/me/trends", label: "My Health Trends", icon: IconChart, match: (h) => h.startsWith("#/me/trends") },
+  { href: "#/me/records", label: "My Medical Records", icon: IconFile, match: (h) => h.startsWith("#/me/records") },
+  { href: "#/me/profile", label: "My Profile", icon: IconUser, match: (h) => h.startsWith("#/me/profile") },
+];
 
-function parseRoute(hash: string): Route {
-  const m = hash.match(/^#\/patient\/([^/?#]+)/);
-  return m ? { page: "patient", id: decodeURIComponent(m[1]) } : { page: "overview" };
+function useHash() {
+  const [hash, setHash] = useState(() => window.location.hash || "#/");
+  useEffect(() => {
+    const on = () => { setHash(window.location.hash || "#/"); window.scrollTo(0, 0); };
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return hash;
 }
 
-export default function App() {
-  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash));
+function useServiceStatus() {
   const [status, setStatus] = useState<StatusResponse | "down" | null>(null);
-  const [source, setSource] = useState<MonitoringSourceStatus | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
-  const touch = useCallback(() => setLastUpdate(new Date().toISOString()), []);
-
   useEffect(() => {
-    const onHash = () => { setRoute(parseRoute(window.location.hash)); window.scrollTo(0, 0); };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
-  useEffect(() => {
-    const load = () => {
-      fetchStatus().then(setStatus).catch(() => setStatus("down"));
-      fetchMonitoringStatus().then(setSource).catch(() => setSource(null));
-    };
+    const load = () => fetchStatus().then(setStatus).catch(() => setStatus("down"));
     load();
     const t = window.setInterval(load, 10000);
     return () => window.clearInterval(t);
   }, []);
+  return status;
+}
 
+function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: string; status: StatusResponse | "down" | null; onSignOut: () => void }) {
+  const m = hash.match(/^#\/doctor\/patients\/([^/?#]+)/);
+  const pid = m ? decodeURIComponent(m[1]) : null;
+  const [title, page] = pid ? ["Patient monitoring", <PatientMonitor key={pid} pid={pid} />]
+    : hash.startsWith("#/doctor/patients") ? ["Patient directory", <PatientDirectory />]
+      : hash.startsWith("#/doctor/alerts") ? ["Alerts", <AlertsPage />]
+        : ["Dashboard", <DoctorDashboard />];
   return (
-    <div className="flex min-h-screen flex-col bg-surface font-sans text-navy-900">
-      <Header status={status} source={source} lastUpdate={lastUpdate} />
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">
-        {route.page === "overview" ? <Overview onUpdate={touch} /> : <PatientDetail key={route.id} pid={route.id} onUpdate={touch} />}
-      </main>
-      <footer className="border-t border-slate-200 bg-white">
-        <p className="mx-auto max-w-7xl px-4 py-3 text-xs text-navy-700 sm:px-6">
-          {BRAND.name} prototype · {BRAND.disclaimer} Not a medical device; not clinically validated. Patient records are synthetic; monitoring data is simulated unless a source states otherwise.
-        </p>
-      </footer>
-    </div>
+    <Shell portal="Doctor Portal" user={user} nav={DOCTOR_NAV} hash={hash} title={title as string} status={status} onSignOut={onSignOut}
+      subtitle="Personalized post-discharge patient monitoring">{page}</Shell>
   );
+}
+
+function PatientPortal({ user, hash, status, onSignOut }: { user: User; hash: string; status: StatusResponse | "down" | null; onSignOut: () => void }) {
+  const pid = user.patientId!;
+  const { monitor, live } = useMonitor(pid);   // one live connection shared by all patient pages
+  const [title, page] = hash.startsWith("#/me/trends") ? ["My Health Trends", <MyTrends monitor={monitor} />]
+    : hash.startsWith("#/me/records") ? ["My Medical Records", <MyRecords pid={pid} />]
+      : hash.startsWith("#/me/profile") ? ["My Profile", <MyProfile user={user} pid={pid} monitor={monitor} />]
+        : ["My Health", <MyHealth user={user} monitor={monitor} live={live} />];
+  return (
+    <Shell portal="Patient Portal" user={{ ...user, displayName: displayName(user.displayName) }} nav={PATIENT_NAV} hash={hash} title={title as string}
+      status={status} onSignOut={onSignOut} subtitle="Your home monitoring readings and health record">{page}</Shell>
+  );
+}
+
+export default function App() {
+  const hash = useHash();
+  const status = useServiceStatus();
+  const [user, setUser] = useState<User | null | undefined>(undefined);   // undefined = checking session
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMe().then((r) => setUser(r.user)).catch(() => setUser(null));
+    setUnauthorizedHandler(() => { setUser(null); setNotice("Your session has ended. Please sign in again."); });
+    return () => setUnauthorizedHandler(null);
+  }, []);
+
+  // Role-aware routing: each role lands on its own portal and cannot open the other one.
+  useEffect(() => {
+    if (!user) return;
+    const home = user.role === "doctor" ? "#/doctor" : "#/me";
+    const legacy = hash.match(/^#\/patient\/([^/?#]+)/);
+    if (user.role === "doctor" && legacy) window.location.hash = `#/doctor/patients/${legacy[1]}`;
+    else if (user.role === "doctor" && !hash.startsWith("#/doctor")) window.location.hash = home;
+    else if (user.role === "patient" && !hash.startsWith("#/me")) window.location.hash = home;
+  }, [user, hash]);
+
+  const signOut = useCallback(async () => {
+    try { await logout(); } catch { /* the session is cleared locally either way */ }
+    setUser(null); setNotice(null); window.location.hash = "#/";
+  }, []);
+
+  if (user === undefined) {
+    return <div className="grid min-h-screen place-items-center bg-surface text-sm text-navy-500" role="status">Loading…</div>;
+  }
+  if (user === null) {
+    return <Login notice={notice ?? (status === "down" ? "The backend is not reachable. Start it with scripts/dev/up.sh." : null)}
+      onSignedIn={(u) => { setNotice(null); setUser(u); window.location.hash = u.role === "doctor" ? "#/doctor" : "#/me"; }} />;
+  }
+  return user.role === "doctor"
+    ? <DoctorPortal user={user} hash={hash} status={status} onSignOut={signOut} />
+    : <PatientPortal user={user} hash={hash} status={status} onSignOut={signOut} />;
 }

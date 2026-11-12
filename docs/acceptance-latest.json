@@ -1,7 +1,7 @@
 {
-  "ranAt": "2026-11-12T16:44:09.673008+00:00",
-  "finishedAt": "2026-11-12T16:47:50.542136+00:00",
-  "commit": "4e0d637e19e82c0a56c351dadd5bfe8601dda2ea",
+  "ranAt": "2026-11-12T19:12:42.375548+00:00",
+  "finishedAt": "2026-11-12T19:16:56.122930+00:00",
+  "commit": "7090cc14636b2102fbd93864a72c71d4ae37b308",
   "command": "scripts/acceptance.py",
   "platform": "linux",
   "api": "http://localhost:8000",
@@ -22,11 +22,11 @@
     },
     "levels_seen": {
       "status": "PASS",
-      "evidence": "NORMAL@1.6s \u2192 WATCH@10.2s \u2192 REVIEW@14.3s \u2192 URGENT@18.4s"
+      "evidence": "NORMAL@2.1s \u2192 WATCH@7.6s \u2192 REVIEW@11.5s \u2192 URGENT@14.4s"
     },
     "alert_events": {
       "status": "PASS",
-      "evidence": "3 alert events recorded server-side for this patient; recent sequence: WATCH \u2192 REVIEW \u2192 URGENT; e.g. \"NEWS2-style partial aggregate 8 (from 4 of 7 parameters; a single parameter scores 3).\""
+      "evidence": "9 alert events recorded server-side for this patient; recent sequence: WATCH \u2192 REVIEW \u2192 URGENT \u2192 WATCH \u2192 REVIEW \u2192 URGENT; e.g. \"NEWS2-style partial aggregate 8 (from 4 of 7 parameters; a single parameter scores 3).\""
     },
     "overview_status": {
       "status": "PASS",
@@ -42,7 +42,7 @@
     },
     "fhir_readback": {
       "status": "PASS",
-      "evidence": "Observation/63131: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0"
+      "evidence": "Observation/84011: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0"
     },
     "explanations": {
       "status": "PASS",
@@ -54,11 +54,11 @@
     },
     "websocket_updates": {
       "status": "PASS",
-      "evidence": "direct pushes [(1, 'URGENT', '2026-11-12T16:45:20.161729+00:00'), (2, 'URGENT', '2026-11-12T16:45:20.924839+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')]"
+      "evidence": "direct pushes [(1, 'URGENT', '2026-11-12T19:13:58.724451+00:00'), (2, 'URGENT', '2026-11-12T19:13:59.715867+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')]"
     },
     "scale2": {
       "status": "PASS",
-      "evidence": "SpO2 87.0%: Scale 1 score 3 \u2192 after FHIR Flag/63376 Scale 2 score 1 (total 10\u21928) \u2192 flag cleared, Scale 1"
+      "evidence": "SpO2 87.0%: Scale 1 score 3 \u2192 after FHIR Flag/84256 Scale 2 score 1 (total 10\u21928) \u2192 flag cleared, Scale 1"
     },
     "personal_baselines": {
       "status": "PASS",

@@ -1,6 +1,6 @@
 # Development utilities
 
-The clinician dashboard contains no demo or test controls. These tools remain for development, verification and evaluation. They are API endpoints or scripts, not UI.
+The patient page has one simulation control, the **Live Simulation** panel (scenario, Start, Stop, Reset, progress, status), which drives the simulator endpoints below. Everything else here is an API endpoint or script, not UI.
 
 | Purpose | How |
 |---|---|
@@ -13,7 +13,13 @@ The clinician dashboard contains no demo or test controls. These tools remain fo
 | All automated tests and the production build | `scripts/check.sh` |
 | FHIR inspection | `GET /api/inspector/observations/{id}` · `GET /api/inspector/ingestions` |
 
-Patient ids: `curl -s http://localhost:8000/api/patients`.
+Patient ids: see `.local/api/credentials.json` (patientId) after `scripts/dev/accounts.sh`.
+
+## Sign-in and authorization
+
+The API requires sign-in (`AUTH_REQUIRED=true` by default; tests build `Settings` directly with it off). `scripts/dev/accounts.sh` creates one `doctor` account and one account per synthetic patient with random passwords (PBKDF2 hashes in SQLite; plain passwords only in `.local/api/credentials.json`, mode 600). `--reset` issues new passwords. Sessions are HttpOnly SameSite=Strict cookies (12 h). An ASGI middleware enforces, for HTTP and WebSocket: public status/meta/auth routes; doctor: all routes; patient: GET of their own `/api/patients/{id}/profile`, `/api/demo/monitor/{id}` and `/ws/monitor/{id}` only; everything else denied. The in-process simulator posts observations with a per-process internal token. `scripts/dev/simulate.sh` and `scripts/acceptance.py` sign in as the local doctor.
+
+Not covered: HAPI FHIR itself (port 8090) has no authentication and must stay bound to localhost; no HTTPS on localhost (set `COOKIE_SECURE=true` behind TLS); no password change UI; failed sign-ins are throttled in memory only.
 
 ## Monitoring workflow (what the dashboard shows)
 
@@ -29,3 +35,5 @@ observation source (today: simulated, labelled in every Observation's device.dis
 - Data older than `MONITOR_STALE_MINUTES` (default 15) is marked stale.
 - No physical device integration exists; `/api/monitoring/status` always reports `physicalDevicesConnected: 0`.
 - No simulator starts automatically.
+- Start and Reset set a current-run view for the patient: the dashboard, the overview and the server-side assessment then use only readings from that run (never older than the 60-minute window), and the patient's last assessed level is cleared so the new run's alerts are raised afresh. Stored FHIR Observations and alert history are never deleted.
+- A 20-step run has too few readings to form a personal baseline (at least 20 older trusted readings per vital are needed), so the vital cards show "needs more readings"; baselines are exercised by the replay lab and unit tests.
