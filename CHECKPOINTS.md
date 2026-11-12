@@ -33,7 +33,7 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ## Clinician-facing base prototype (2026-11-12, branch feature/clinical-dashboard)
 
-Checkpoint before changes: branch `checkpoint/pre-clinical-ui` (= main `b592bd7`).
+Checkpoint before changes: branch `checkpoint/pre-clinical-ui` (= main `4e0d637`).
 
 UI: hackathon controls removed from the dashboard (judge controls, demo and replay buttons, evaluation tables, Evidence Console, seeds and fingerprints, "Round 1 MVP"). Their backend endpoints and scripts are kept as developer utilities (docs/DEVELOPMENT.md). New: patient overview (search, risk filter, monitoring status, latest vitals, last reading), patient detail (demographics, discharge, conditions, medications, trusted vitals with personal baselines and trends, risk assessment with reasons, thresholds, source Observations and data reliability, alert history, SpO₂ Scale 2 configuration), header status (backend, FHIR server, monitoring source, last update).
 
