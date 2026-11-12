@@ -4,6 +4,10 @@ import {
   type AlertEvent, type MonitoringSourceStatus, type Overview, type OverviewPatient, type RiskLevel, type Scale2Status,
 } from "../api";
 import { AlertList } from "../components/AlertList";
+import { acknowledgeAlert, exportUrls } from "../api";
+import { IconDownload } from "../components/icons";
+import { useNotifications } from "../notifications";
+import { VideoLink } from "./data";
 import { IconChevron, IconSearch } from "../components/icons";
 import { RiskPanel } from "../components/risk";
 import { SimulationPanel } from "../components/SimulationPanel";
@@ -167,7 +171,13 @@ export function PatientDirectory() {
       {!data && !error && <p className="text-sm text-navy-500">Loading patients…</p>}
       {data && (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <p className="border-b border-slate-100 px-5 py-3 text-xs text-navy-500" data-testid="result-count">{rows.length} of {data.patients.length} patients</p>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3">
+            <p className="text-xs text-navy-500" data-testid="result-count">{rows.length} of {data.patients.length} patients</p>
+            <div className="flex gap-3 text-sm font-semibold">
+              <a href="#/doctor/data" className="text-teal-700 hover:underline">+ Add patient</a>
+              <a href={exportUrls.directory} download className="inline-flex items-center gap-1 text-teal-700 hover:underline"><IconDownload width={16} height={16} />Export CSV</a>
+            </div>
+          </div>
           {rows.length === 0 ? <div className="p-5"><Empty>No patients match this search and filter.</Empty></div> : (
             <>
               <table className="hidden w-full text-left text-sm md:table" data-testid="patient-table">
@@ -261,7 +271,7 @@ export function PatientSummary({ pid, compact = false }: { pid: string; compact?
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-2xl font-semibold text-navy-900" data-testid="patient-name">{displayName(profile.patient.name)}</h2>
-          <p className="text-sm capitalize text-navy-500">{profile.patient.age} years · {profile.patient.gender} · born {fmtDate(profile.patient.birthDate)} · <span className="normal-case">synthetic record</span></p>
+          <p className="text-sm capitalize text-navy-500">{profile.patient.age} years · {profile.patient.gender} · born {fmtDate(profile.patient.birthDate)} · <span className="normal-case">{(profile.patient as any).source === "synthea" || (profile.patient as any).source === undefined ? "synthetic record (Synthea)" : "registered in the Doctor Portal (test record)"}</span></p>
         </div>
         {profile.discharge && (
           <div className="rounded-xl bg-teal-50 px-4 py-2 text-sm text-navy-900">
@@ -305,13 +315,22 @@ export function PatientMonitor({ pid }: { pid: string }) {
     return () => { alive = false; window.clearInterval(t); };
   }, [pid, simRunning, tick]);
   const afterSim = useCallback(() => { void refresh(); setTick((n) => n + 1); }, [refresh]);
+  const notif = useNotifications();
+  const ack = useCallback(async (id: number) => { await (notif ? notif.acknowledge(id) : acknowledgeAlert(id).then(() => undefined)); setTick((n) => n + 1); }, [notif]);
   const noData = !!monitor && monitor.observationCount === 0;
   const waiting = pending || noData;
   const windowMin = monitor ? (Date.parse(monitor.evaluatedAt) - Date.parse(monitor.windowStart)) / 60000 : 0;
   const resetView = !!monitor && windowMin < monitor.assessment.recentWindowMinutes - 1;
   return (
     <div className="space-y-6">
-      <a href="#/doctor/patients" className="inline-flex items-center gap-1 text-sm font-medium text-teal-700 hover:underline">← Patient directory</a>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <a href="#/doctor/patients" className="inline-flex items-center gap-1 text-sm font-medium text-teal-700 hover:underline">← Patient directory</a>
+        <div className="flex flex-wrap items-center gap-2" data-testid="patient-actions">
+          <a href={exportUrls.record(pid)} download className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-navy-900 hover:bg-slate-50"><IconDownload width={16} height={16} />Record CSV</a>
+          <a href={exportUrls.observations(pid)} download className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-navy-900 hover:bg-slate-50"><IconDownload width={16} height={16} />Vitals CSV</a>
+          <VideoLink label="Start Video Consultation" testid="video-patient-page" />
+        </div>
+      </div>
       <PatientSummary pid={pid} compact />
 
       <section aria-labelledby="demo-heading" className="rounded-2xl border border-dashed border-teal-600/50 bg-teal-50/40 p-1">
@@ -344,7 +363,7 @@ export function PatientMonitor({ pid }: { pid: string }) {
 
       <VitalCharts monitor={monitor} waiting={waiting} clinician />
       <RiskPanel monitor={monitor} waiting={waiting} />
-      <Card title="Alert history" right={<span className="text-xs text-navy-500">Recorded when the assessed level changes</span>}><AlertList alerts={alerts} limit={8} /></Card>
+      <Card title="Alert history" right={<span className="text-xs text-navy-500">Recorded when the assessed level changes</span>}><AlertList alerts={alerts} limit={8} onAcknowledge={ack} /></Card>
       <Scale2Panel pid={pid} status={monitor?.scale2} onChange={() => void refresh()} />
     </div>
   );
@@ -353,17 +372,20 @@ export function PatientMonitor({ pid }: { pid: string }) {
 export function AlertsPage() {
   const { data } = useOverview(15000);
   const [alerts, setAlerts] = useState<AlertEvent[] | null>(null);
+  const [tick, setTick] = useState(0);
+  const notif = useNotifications();
   useEffect(() => {
     let alive = true;
     const load = () => fetchAlerts(undefined, 100).then((a) => alive && setAlerts(a.alerts)).catch(() => alive && setAlerts([]));
     void load();
     const t = window.setInterval(load, 8000);
     return () => { alive = false; window.clearInterval(t); };
-  }, []);
+  }, [tick]);
+  const ack = async (id: number) => { await (notif ? notif.acknowledge(id) : acknowledgeAlert(id).then(() => undefined)); setTick((n) => n + 1); };
   const names = Object.fromEntries((data?.patients ?? []).map((p) => [p.id, displayName(p.name)]));
   return (
-    <Card title="Alert history (all patients)" right={<span className="text-xs text-navy-500">Alerts are recorded when an assessed risk level changes. No acknowledgement workflow yet.</span>}>
-      <AlertList alerts={alerts} names={names} showPatient />
+    <Card title="Alert history (all patients)" right={<span className="text-xs text-navy-500">Recorded when an assessed risk level changes. Acknowledging records your review; it never changes the alert.</span>}>
+      <AlertList alerts={alerts} names={names} showPatient onAcknowledge={ack} />
     </Card>
   );
 }

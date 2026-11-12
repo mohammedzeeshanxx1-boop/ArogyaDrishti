@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import CHECKPOINT, __version__
@@ -35,8 +35,8 @@ from .config import BRAND_NAME, DISCLAIMER, TAGLINE, Settings
 from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
-from .patients import patient_profile, list_patients
-from . import auth, detector, evaluation, monitoring, scale2
+from .patients import PORTAL_ID_SYSTEM, _is_portal, _is_synthea, _name, list_patients, patient_profile, patient_summary
+from . import auth, datamgmt, detector, evaluation, monitoring, notifications, scale2
 from .risk import VITAL_LABEL, to_celsius
 from .replay import store as replay_store
 from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
@@ -57,6 +57,32 @@ def _now() -> str:
 
 def fhir_error(status: int, code: str, diagnostics: str, expression: str | None = None) -> JSONResponse:
     return JSONResponse(outcome([outcome_issue("error", code, diagnostics, expression)]), status_code=status, media_type=FHIR_JSON)
+
+
+class IdsRequest(BaseModel):
+    ids: list[int] = Field(max_length=500)
+
+
+class PatientCreate(BaseModel):
+    name: str = Field(max_length=120)
+    birthDate: str = Field(max_length=10)
+    gender: str = Field(max_length=10)
+    dischargeDate: str | None = Field(None, max_length=10)
+    phone: str | None = Field(None, max_length=30)
+    email: str | None = Field(None, max_length=120)
+    requestId: str = Field(pattern=r"^[A-Za-z0-9-]{8,64}$")   # idempotency key: a resubmission returns the same patient
+    allowDuplicate: bool = False
+
+
+class AccountRequest(BaseModel):
+    reset: bool = False
+
+
+class ImportRequest(BaseModel):
+    rows: list[dict[str, str | None]] = Field(max_length=1000)
+    confirm: bool = False
+    fileName: str = Field("upload.csv", max_length=120)
+    importId: str = Field(pattern=r"^[A-Za-z0-9-]{8,64}$")
 
 
 class LoginRequest(BaseModel):
@@ -125,6 +151,8 @@ def create_app(
     async def lifespan(app: FastAPI):
         init_db(settings.sqlite_path)
         auth.init(settings.sqlite_path)
+        monitoring.init(settings.sqlite_path)
+        notifications.init(settings.sqlite_path)
         app.state.fhir = FhirClient(settings.fhir_base_url, settings.fhir_request_timeout_seconds, fhir_transport)
         # The simulator posts to the real ingestion endpoint over HTTP (or in-process ASGI in tests).
         sim_transport = httpx.ASGITransport(app=app) if simulator_in_process else None
@@ -447,8 +475,270 @@ def create_app(
     async def alerts(request: Request, patient: str | None = None, limit: int = Query(50, ge=1, le=500)):
         if patient is not None and not FHIR_ID.match(patient):
             return fhir_error(400, "invalid", "patient must be a FHIR id")
-        return {"alerts": monitoring.alert_events(settings.sqlite_path, patient, limit),
-                "note": "Recorded when the assessed risk level changes. No acknowledgement workflow exists."}
+        rows = monitoring.alert_events(settings.sqlite_path, patient, limit)
+        names = await patient_names(request.app)
+        items = notifications.with_acks(settings.sqlite_path, rows, username(request))
+        return {"alerts": [{**a, "patientName": names.get(a["patient_id"])} for a in items],
+                "note": "Recorded when the assessed risk level changes. Acknowledgement records who reviewed an alert; it never changes the alert."}
+
+    # ------------------------------------------------------------ doctor notifications (risk events)
+    def username(request) -> str:
+        u = getattr(request.state, "user", None)
+        return u["username"] if u else "local"
+
+    async def patient_names(app_) -> dict[str, str]:
+        try:
+            pts = (await cached_patients(app_))["patients"]
+        except FhirUnavailable:
+            return {}
+        return {p["id"]: re.sub(r"\s+", " ", re.sub(r"\d+", "", p["name"])).strip() for p in pts}
+
+    async def named(app_, feed: dict) -> dict:
+        names = await patient_names(app_)
+        return {**feed, "items": [{**i, "patientName": names.get(i["patient_id"])} for i in feed["items"]]}
+
+    @app.get("/api/notifications")
+    async def notifications_feed(request: Request, after: int | None = Query(None, ge=0), limit: int = Query(30, ge=1, le=200)):
+        return await named(request.app, notifications.feed(settings.sqlite_path, username(request), after, limit))
+
+    @app.post("/api/notifications/read")
+    async def notifications_read(body: IdsRequest, request: Request):
+        n = notifications.mark_read(settings.sqlite_path, username(request), body.ids)
+        return {"marked": n, "unread": notifications.feed(settings.sqlite_path, username(request), None, 1)["unread"]}
+
+    @app.post("/api/notifications/read-all")
+    async def notifications_read_all(request: Request):
+        n = notifications.mark_all_read(settings.sqlite_path, username(request))
+        return {"marked": n, "unread": 0}
+
+    @app.post("/api/alerts/{eid}/acknowledge")
+    async def acknowledge_alert(eid: int, request: Request):
+        ack = notifications.acknowledge(settings.sqlite_path, username(request), eid)
+        if ack is None:
+            return fhir_error(404, "not-found", f"alert event {eid} not found")
+        return ack
+
+    @app.websocket("/ws/notifications")
+    async def notifications_ws(ws: WebSocket, after: int | None = None):
+        """Pushes newly recorded risk events to the signed-in doctor (cursor-based; no replay of older history)."""
+        await ws.accept()
+        user = (ws.scope.get("state") or {}).get("user")
+        who = user["username"] if user else "local"
+        db = settings.sqlite_path
+        try:
+            hello = notifications.feed(db, who, None, 20)
+            cursor = hello["latestId"] if after is None else min(after, hello["latestId"])
+            await ws.send_json({"type": "hello", "cursor": cursor, **(await named(ws.app, hello))})
+            ticks = 0
+            while True:
+                latest = notifications.latest_id(db)
+                if latest > cursor:
+                    f = notifications.feed(db, who, cursor, 50)
+                    if f["items"]:
+                        cursor = f["items"][-1]["id"]
+                        await ws.send_json({"type": "events", "cursor": cursor, **(await named(ws.app, f))})
+                ticks += 1
+                if ticks % 15 == 0:
+                    await ws.send_json({"type": "ping", "cursor": cursor, "unread": notifications.feed(db, who, None, 1)["unread"]})
+                await asyncio.sleep(1.0)
+        except (WebSocketDisconnect, RuntimeError):
+            return
+
+    # ------------------------------------------------------------ patient management (doctor only)
+    async def add_to_patient_cache(app_, pid: str) -> None:
+        """Add one new patient to the cached directory (rebuilding the whole list takes ~20 s on HAPI/H2)."""
+        app_.state.overview_cache = None
+        hit = getattr(app_.state, "patients_cache", None)
+        if not hit:
+            return
+        p = await app_.state.fhir.read("Patient", pid)
+        if p is None:
+            return
+        entry = await patient_summary(app_.state.fhir, p)
+        body = hit[1]
+        pts = [x for x in body["patients"] if x["id"] != pid] + [entry]
+        app_.state.patients_cache = (hit[0], {**body, "count": len(pts), "patients": pts})
+
+    async def find_same_person(request, clean: dict) -> dict | None:
+        """Existing monitored patient with the same name and birth date (one indexed HAPI search)."""
+        found = await fhir(request).search("Patient", {"birthdate": clean["birthDate"], "family": clean["name"].split(" ")[-1], "_count": 50}, limit=50)
+        want = clean["name"].lower().split()
+        for p in found:
+            if (_is_synthea(p) or _is_portal(p)) and re.sub(r"\d+", "", _name(p)).lower().split() == want:
+                return p
+        return None
+
+    @app.post("/api/patients", status_code=201)
+    async def create_patient(body: PatientCreate, request: Request):
+        clean, errors = datamgmt.validate_patient(body.model_dump())
+        if errors:
+            return JSONResponse({"created": False, "errors": errors}, status_code=422)
+        if not body.allowDuplicate:
+            dup = await find_same_person(request, clean)
+            if dup and not any(i.get("system") == PORTAL_ID_SYSTEM and i.get("value") == body.requestId for i in dup.get("identifier", [])):
+                return JSONResponse({"created": False, "duplicateOf": dup["id"], "errors": [{"row": None, "field": "name",
+                                     "message": f"A patient named {clean['name']} born {clean['birthDate']} already exists"}]}, status_code=409)
+        r = await fhir(request).transaction(datamgmt.patient_bundle(clean, "portal-entry", username(request), body.requestId))
+        pid = datamgmt.created_patient_id(r.body) if r.status < 300 else None
+        if pid is None:
+            return JSONResponse({"created": False, "errors": [{"row": None, "field": None, "message": f"FHIR server rejected the patient (HTTP {r.status})"}],
+                                 "outcome": r.body}, status_code=502)
+        await add_to_patient_cache(request.app, pid)
+        return {"created": True, "id": pid, "name": clean["name"], "birthDate": clean["birthDate"], "gender": clean["gender"],
+                "dischargeDate": clean["dischargeDate"], "resource": f"Patient/{pid}"}
+
+    @app.get("/api/patients/{pid}/account")
+    async def patient_account(pid: str):
+        u = auth.user_for_patient(settings.sqlite_path, pid)
+        return {"patientId": pid, "hasAccount": u is not None, "username": u["username"] if u else None}
+
+    @app.post("/api/patients/{pid}/account")
+    async def provision_patient_account(pid: str, body: AccountRequest, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        pt = await fhir(request).read("Patient", pid)
+        if pt is None or not (_is_synthea(pt) or _is_portal(pt)):
+            return fhir_error(404, "not-found", f"Patient/{pid} is not a monitored patient")
+        existing = auth.user_for_patient(settings.sqlite_path, pid)
+        if existing and not body.reset:
+            return fhir_error(409, "duplicate", f"This patient already has the login '{existing['username']}'. Use reset to issue a new password.")
+        name = re.sub(r"\s+", " ", re.sub(r"\d+", "", _name(pt))).strip()
+        user = existing["username"] if existing else auth._username(name, auth.usernames(settings.sqlite_path))
+        password = secrets.token_urlsafe(9)
+        await asyncio.to_thread(auth.upsert_user, settings.sqlite_path, user, "patient", name, password, pid)
+        return {"patientId": pid, "username": user, "password": password, "reset": bool(existing),
+                "note": "Shown once. Give it to the patient securely; it is stored only as a hash."}
+
+    @app.post("/api/import/patients")
+    async def import_patients(body: ImportRequest, request: Request):
+        rows = body.rows
+        errors: list[dict] = []
+        cols = set().union(*(r.keys() for r in rows)) if rows else set()
+        if not rows:
+            errors.append({"row": None, "field": None, "message": "The file has no data rows"})
+        if len(rows) > datamgmt.MAX_PATIENT_ROWS:
+            errors.append({"row": None, "field": None, "message": f"At most {datamgmt.MAX_PATIENT_ROWS} rows per import"})
+        missing = [c for c in ("name", "birth_date", "gender") if c not in cols]
+        unknown = sorted(c for c in cols if c not in datamgmt.PATIENT_COLUMNS)
+        if rows and missing:
+            errors.append({"row": None, "field": None, "message": f"Missing required column(s): {', '.join(missing)}"})
+        if unknown:
+            errors.append({"row": None, "field": None, "message": f"Unknown column(s): {', '.join(unknown)}"})
+        cleaned = []
+        if not errors:
+            seen = set()
+            for i, r in enumerate(rows, start=2):
+                c, errs = datamgmt.validate_patient(r, i)
+                errors += errs
+                if c:
+                    key = (c["name"].lower(), c["birthDate"])
+                    if key in seen:
+                        errors.append({"row": i, "field": "name", "message": "Duplicate of an earlier row in this file"})
+                    elif await find_same_person(request, c):
+                        errors.append({"row": i, "field": "name", "message": f"{c['name']} born {c['birthDate']} already exists"})
+                    seen.add(key)
+                    cleaned.append((i, c))
+        if errors:
+            return {"valid": False, "imported": 0, "rejected": len(rows), "errors": errors,
+                    "message": "Nothing was imported. Fix the listed rows and upload the file again."}
+        if not body.confirm:
+            return {"valid": True, "ready": len(cleaned), "imported": 0, "errors": []}
+        results, who = [], username(request)
+        for i, c in cleaned:
+            r = await fhir(request).transaction(datamgmt.patient_bundle(c, "csv-import", who, f"{body.importId}-{i}"))
+            pid = datamgmt.created_patient_id(r.body) if r.status < 300 else None
+            results.append({"row": i, "name": c["name"], "id": pid, "ok": pid is not None,
+                            "error": None if pid else f"FHIR server rejected the row (HTTP {r.status})"})
+        for x in results:
+            if x["ok"]:
+                await add_to_patient_cache(request.app, x["id"])
+        ok = sum(x["ok"] for x in results)
+        return {"valid": True, "imported": ok, "rejected": len(results) - ok, "results": results, "errors": []}
+
+    @app.post("/api/import/observations")
+    async def import_observations(body: ImportRequest, request: Request):
+        hit = getattr(request.app.state, "patients_cache", None)   # use the cache if built; never wait for a rebuild
+        known = {p["id"] for p in hit[1]["patients"]} if hit else set()
+        for pid in {str(r.get("patient_id") or "").strip() for r in body.rows} - known:   # e.g. registered since the cache was built
+            if FHIR_ID.match(pid) and (pt := await fhir(request).read("Patient", pid)) and (_is_synthea(pt) or _is_portal(pt)):
+                known.add(pid)
+        now = datetime.now(timezone.utc)
+        planned, errors = datamgmt.validate_observation_rows(body.rows, known, now)
+        if not errors:   # same strict validator the ingestion endpoint uses
+            for item in planned:
+                v = validate_observation(datamgmt.import_observation(item, "check", body.fileName, body.importId), now)
+                errors += [{"row": item["row"], "field": None, "message": i.diagnostics} for i in v.issues if i.severity == "error"]
+        if errors:
+            return {"valid": False, "imported": 0, "rejected": len(body.rows), "errors": errors,
+                    "message": "Nothing was imported. Fix the listed rows and upload the file again."}
+        if not body.confirm:
+            return {"valid": True, "ready": len(planned), "rows": len(body.rows), "imported": 0, "errors": []}
+        who, sem = username(request), asyncio.Semaphore(4)
+
+        async def one(item):
+            async with sem:
+                res = await ingest_observation(datamgmt.import_observation(item, who, body.fileName, body.importId), fhir(request), settings.sqlite_path)
+                ok = res.http_status == 201
+                return {"row": item["row"], "patientId": item["patientId"], "loinc": item["loinc"], "ok": ok,
+                        "id": res.body.get("id") if ok else None,
+                        "error": None if ok else next((x.get("diagnostics") for x in res.body.get("issue", []) if x.get("severity") in ("error", "fatal")), None) or f"HTTP {res.http_status}"}
+
+        results = list(await asyncio.gather(*(one(i) for i in planned)))
+        for pid in {r["patientId"] for r in results if r["ok"]}:
+            request.app.state.assessor.request(pid)
+        request.app.state.overview_cache = None
+        ok = sum(r["ok"] for r in results)
+        return {"valid": True, "imported": ok, "rejected": len(results) - ok, "results": results, "errors": []}
+
+    # ------------------------------------------------------------ CSV export (doctor only)
+    def csv_response(text: str, filename: str) -> Response:
+        return Response(content=text.encode("utf-8"), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{datamgmt.safe_filename(filename)}"', "Cache-Control": "no-store"})
+
+    @app.get("/api/export/patients.csv")
+    async def export_directory(request: Request):
+        ov = await clinical_overview(request)
+        rows = []
+        for p in sorted(ov["patients"], key=lambda p: p["name"]):
+            m = p["monitoring"]
+            rows.append([p["id"], re.sub(r"\s+", " ", re.sub(r"\d+", "", p["name"])).strip(), p.get("gender"), p.get("birthDate"), p.get("age"),
+                         p.get("lastDischarge"), p.get("activeConditions"), p.get("activeMedications"), p.get("source"),
+                         m.get("level") if m.get("assessable") else "NOT_ASSESSED", m.get("monitoringStatus"), m.get("lastObservationAt")])
+        return csv_response(datamgmt.to_csv(datamgmt.DIRECTORY_HEADER, rows), f"patients-{datetime.now(timezone.utc):%Y%m%d-%H%M}.csv")
+
+    @app.get("/api/export/patients/{pid}/record.csv")
+    async def export_record(pid: str, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        prof = await patient_profile(fhir(request), pid)
+        if prof is None:
+            return fhir_error(404, "not-found", f"Patient/{pid} not found")
+        pt = prof["patient"]
+        name = re.sub(r"\s+", " ", re.sub(r"\d+", "", pt["name"])).strip()
+        rows = [[pid, name, "demographics", "name", name, None], [pid, name, "demographics", "gender", pt.get("gender"), None],
+                [pid, name, "demographics", "birth_date", pt.get("birthDate"), pt.get("birthDate")],
+                [pid, name, "demographics", "record_source", pt.get("source"), None]]
+        rows += [[pid, name, "contact", t["system"], t["value"], None] for t in pt.get("telecom", [])]
+        d = prof.get("discharge")
+        if d:
+            rows.append([pid, name, "discharge", "discharged", d.get("facility"), d.get("discharged")])
+        rows += [[pid, name, "condition", c.get("condition"), None, c.get("onset")] for c in prof["activeConditions"]]
+        rows += [[pid, name, "medication", m.get("medication"), m.get("dosage"), m.get("authoredOn")] for m in prof["activeMedications"]]
+        rows += [[pid, name, "allergy", a.get("substance"), a.get("criticality"), None] for a in prof["allergies"]]
+        return csv_response(datamgmt.to_csv(datamgmt.RECORD_HEADER, rows), f"record-{name}.csv")
+
+    @app.get("/api/export/patients/{pid}/observations.csv")
+    async def export_observations(pid: str, request: Request):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        pt = await fhir(request).read("Patient", pid)
+        if pt is None:
+            return fhir_error(404, "not-found", f"Patient/{pid} not found")
+        from .patients import _name
+        name = re.sub(r"\s+", " ", re.sub(r"\d+", "", _name(pt))).strip()
+        obs = await fhir(request).search_by_date("Observation", {"subject": f"Patient/{pid}"}, limit=50_000)
+        rows = datamgmt.observation_rows(obs, pid, name)
+        return csv_response(datamgmt.to_csv(datamgmt.OBS_HEADER, rows), f"observations-{name}.csv")
 
     @app.get("/api/monitoring/status")
     async def monitoring_status(request: Request) -> dict:

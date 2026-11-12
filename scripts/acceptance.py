@@ -117,15 +117,20 @@ def services():
 @guard("patients_8")
 def patients():
     c, body = call("GET", f"{API}/api/patients")
-    pts = (body or {}).get("patients", [])
+    everyone = (body or {}).get("patients", [])
+    # The 8 Synthea discharge profiles must stay complete. Patients registered in the Doctor Portal (form or
+    # CSV import) legitimately have no conditions or medications and are reported separately.
+    pts = [p for p in everyone if p.get("source", "synthea") == "synthea"]
+    portal = len(everyone) - len(pts)
     cw, bw = call("GET", f"{WEB}/api/patients")
     complete = 0
     for p in pts:
         _, prof = call("GET", f"{API}/api/patients/{p['id']}/profile")
         complete += bool(prof and prof["completeness"]["complete"] and prof["activeConditions"] and prof["activeMedications"])
-    ok = len(pts) >= 8 and complete == len(pts) and (bw or {}).get("count") == len(pts)
+    ok = len(pts) >= 8 and complete == len(pts) and (bw or {}).get("count") == len(everyone)
     record("patients_8", "PASS" if ok else "FAIL",
-           f"{len(pts)} patients via API, {(bw or {}).get('count')} via web proxy; {complete}/{len(pts)} profiles complete with conditions and medications")
+           f"{len(pts)} Synthea patients ({complete} complete with conditions and medications) + {portal} registered in the Doctor Portal; "
+           f"{len(everyone)} via API, {(bw or {}).get('count')} via web proxy")
     return pts
 
 

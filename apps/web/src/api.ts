@@ -122,6 +122,11 @@ export interface AlertEvent {
   rule: string | null;
   reason: string;
   observation: string | null;
+  patientName?: string | null;
+  summary?: string;
+  read?: boolean;
+  acknowledgements?: { username: string; acknowledgedAt: string }[];
+  acknowledgedByMe?: boolean;
 }
 
 export class ApiError extends Error {
@@ -173,3 +178,46 @@ export const fetchSimulator = () => getJson<SimulatorState>("/api/demo/simulator
 export const startSimulation = (patientId: string, scenario: string) => getJson<SimulatorState>("/api/demo/simulator/start", post({ patientId, scenario }));
 export const stopSimulation = () => getJson<SimulatorState>("/api/demo/simulator/stop", post({}));
 export const resetSimulation = (patientId: string) => getJson<{ windowStart: string; simulator: SimulatorState }>("/api/demo/reset", post({ patientId }));
+
+// ---------------------------------------------------------------- doctor notifications (recorded risk events)
+export interface NotificationFeed { latestId: number; baselineId: number; unread: number; items: AlertEvent[] }
+export const fetchNotifications = (after?: number, limit = 30) =>
+  getJson<NotificationFeed>(`/api/notifications?limit=${limit}${after !== undefined ? `&after=${after}` : ""}`);
+export const markNotificationsRead = (ids: number[]) => getJson<{ marked: number; unread: number }>("/api/notifications/read", post({ ids }));
+export const markAllNotificationsRead = () => getJson<{ marked: number; unread: number }>("/api/notifications/read-all", post({}));
+export const acknowledgeAlert = (id: number) => getJson<{ eventId: number; username: string; acknowledgedAt: string }>(`/api/alerts/${id}/acknowledge`, post({}));
+export const notificationsSocketUrl = (after?: number) =>
+  `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/notifications${after !== undefined ? `?after=${after}` : ""}`;
+
+// ---------------------------------------------------------------- patient management (doctor only)
+export interface FieldError { row: number | null; field: string | null; message: string }
+export interface NewPatient { name: string; birthDate: string; gender: string; dischargeDate?: string; phone?: string; email?: string; requestId: string; allowDuplicate?: boolean }
+export class FormError extends Error { constructor(message: string, public errors: FieldError[], public status: number, public duplicateOf?: string) { super(message); } }
+
+async function postForm<T>(url: string, body: unknown): Promise<T> {
+  const resp = await fetch(url, { credentials: "same-origin", ...post(body) });
+  const data = await resp.json().catch(() => ({}));
+  if (resp.status === 401) onUnauthorized?.();
+  if (!resp.ok) {
+    const errs: FieldError[] = data?.errors ?? [{ row: null, field: null, message: data?.issue?.[0]?.diagnostics ?? (typeof data?.detail === "string" ? data.detail : `Request failed (HTTP ${resp.status})`) }];
+    throw new FormError(errs[0]?.message ?? `HTTP ${resp.status}`, errs, resp.status, data?.duplicateOf);
+  }
+  return data as T;
+}
+export const createPatient = (p: NewPatient) => postForm<{ created: true; id: string; name: string }>("/api/patients", p);
+export const fetchPatientAccount = (pid: string) => getJson<{ patientId: string; hasAccount: boolean; username: string | null }>(`/api/patients/${enc(pid)}/account`);
+export const provisionPatientAccount = (pid: string, reset = false) =>
+  postForm<{ username: string; password: string; reset: boolean; note: string }>(`/api/patients/${enc(pid)}/account`, { reset });
+
+export interface ImportResult {
+  valid: boolean; ready?: number; imported: number; rejected: number; errors: FieldError[]; message?: string;
+  results?: { row: number; ok: boolean; id: string | null; error: string | null; name?: string; patientId?: string; loinc?: string }[];
+}
+export const importCsv = (kind: "patients" | "observations", rows: Record<string, string>[], confirm: boolean, fileName: string, importId: string) =>
+  postForm<ImportResult>(`/api/import/${kind}`, { rows, confirm, fileName, importId });
+
+export const exportUrls = {
+  directory: "/api/export/patients.csv",
+  record: (pid: string) => `/api/export/patients/${enc(pid)}/record.csv`,
+  observations: (pid: string) => `/api/export/patients/${enc(pid)}/observations.csv`,
+};
