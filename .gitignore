@@ -1,0 +1,12 @@
+.env
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+.venv/
+*.db
+data/
+# Downloaded datasets are never committed (see services/*/README.md)
+services/bidmc/data/
+services/synthea/output/
+.DS_Store
