@@ -10,6 +10,18 @@ browser ──HTTP/WS──> web (nginx + React) ──/api, /ws──> api (Fas
                                                   hapi-fhir (R4) ──JDBC──> database (PostgreSQL)
 ```
 
+## Process model (localhost-first)
+
+| Process | Started by | URL |
+|---|---|---|
+| Vite dev server (React) | `scripts/dev/start-web.sh` | http://localhost:5173 (proxies `/api`, `/health`, `/ws` to the API) |
+| FastAPI (uvicorn) | `scripts/dev/start-api.sh` | http://localhost:8000 |
+| HAPI FHIR 5.7.0 (Java 11, H2 in `.local/hapi/data`) | `scripts/dev/start-hapi.sh` | http://localhost:8090/baseR4 |
+| Synthea pipeline (Python + Java) | `scripts/dev/seed.sh` | one-shot |
+| Simulator, BIDMC replay, monitoring engine | planned as local Python processes (C2, C4, C5) | — |
+
+All URLs come from environment variables (`.env.local.example`). In containers the same code runs with `FHIR_BASE_URL=http://hapi-fhir:8080/fhir` and nginx in front of the API.
+
 ## Data ownership
 
 - **HAPI FHIR** is the only store for clinical data: Patient, Condition, MedicationRequest, Observation.

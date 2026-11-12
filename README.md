@@ -10,7 +10,7 @@ A personalized post-discharge deterioration monitor, built for MineArena 1.0 pro
 
 - **Built and tested against a real HAPI FHIR R4 server:** strict ingestion of four vital signs (heart rate, SpO2, respiratory rate, body temperature) with HAPI `$validate`, storage, read-back and restart persistence; 8 Synthea-generated discharge profiles with conditions and medications; patient, profile and FHIR Inspector endpoints.
 - **Not built yet:** simulator and BIDMC replay, scoring, artifact detection, alerts, dashboard views, replay and report.
-- **Caveat:** the C1 evidence used a local HAPI 5.7.0 server (`infra/hapi-local`), because container images could not be pulled in the build environment. The Docker stack is defined but has not been run.
+- **Development is localhost-first, without Docker:** web on http://localhost:5173, API on http://localhost:8000, HAPI FHIR (native Java) on http://localhost:8090/baseR4. The Docker stack is kept for later deployment but has not been run.
 
 See [CHECKPOINTS.md](CHECKPOINTS.md) for every command and its actual result.
 
@@ -24,24 +24,29 @@ See [CHECKPOINTS.md](CHECKPOINTS.md) for every command and its actual result.
 
 App-only event metadata goes to SQLite on the `api` volume. FHIR resources are never stored there.
 
-## Run with Docker
+## Run on localhost (development)
+
+Needs Python 3.10+, Node 20+, Java 11+ on PATH (for Synthea) and curl.
+
+```bash
+scripts/dev/setup.sh      # once: .venv, npm packages, Java 11 runtime for HAPI
+scripts/dev/up.sh         # HAPI :8090, API :8000, web :5173 in the background, then health check
+scripts/dev/seed.sh       # once: generate the Synthea cohort and load it into HAPI
+scripts/dev/health.sh     # PASS / FAIL / BLOCKED per service
+scripts/dev/down.sh       # stop (data in .local/ is kept)
+```
+
+Or run each in its own terminal: `scripts/dev/start-hapi.sh`, `scripts/dev/start-api.sh` (`RELOAD=1` for auto-reload), `scripts/dev/start-web.sh`. Settings live in `.env.local.example`; copy it to `.env.local` to override. Logs go to `.local/logs/`.
+
+HAPI runs from the official HAPI FHIR 5.7.0 CLI with a small, documented jar patch (`infra/hapi-local/README.md`). If it cannot start, `health.sh` reports HAPI as BLOCKED and the live FHIR tests are skipped as BLOCKED, never passed.
+
+## Run with Docker (later deployment; untested)
 
 ```bash
 cp .env.example .env                                    # then change POSTGRES_PASSWORD
 docker compose up -d --build
-docker compose --profile seed run --rm synthea-import   # generate and load the cohort
+docker compose --profile seed run --rm synthea-import
 scripts/smoke.sh
-```
-
-## Run without Docker
-
-```bash
-JAVA11=/path/to/java11 infra/hapi-local/run.sh          # HAPI R4 on http://localhost:8090/baseR4
-python3 services/synthea/pipeline.py all --fhir-base http://localhost:8090/baseR4
-
-python3 -m venv .venv && .venv/bin/pip install -r apps/api/requirements-dev.txt
-(cd apps/api && FHIR_BASE_URL=http://localhost:8090/baseR4 ../../.venv/bin/uvicorn app.main:app --port 8000)
-npm --prefix apps/web ci && npm --prefix apps/web run dev    # http://localhost:5173
 ```
 
 ## API
@@ -61,7 +66,7 @@ Rejections are FHIR `OperationOutcome` resources. Interactive docs: http://local
 ## Checks
 
 ```bash
-PYTHON=.venv/bin/python HAPI_TEST_FHIR_BASE=http://localhost:8090/baseR4 scripts/check.sh
+scripts/check.sh          # uses .venv and the localhost URLs by default
 ```
 
 Live tests need a running HAPI. Without one they are skipped with a `BLOCKED:` reason, never passed.
@@ -75,7 +80,7 @@ services/synthea  Synthea pipeline (pinned version, seeds, selection, import, ve
 services/bidmc    BIDMC PhysioNet replay (not implemented yet)
 infra             nginx config; hapi-local/ fallback HAPI server
 tests             repository-level tests
-scripts           check.sh, smoke.sh, c1_persistence_check.py
+scripts           dev/ (localhost start, stop, health, seed), check.sh, smoke.sh (containers), c1_persistence_check.py
 docs              architecture and requirement traceability
 ```
 

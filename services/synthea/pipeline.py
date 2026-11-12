@@ -10,7 +10,7 @@ Steps (stdlib only; needs Java 11+ for Synthea):
   all       every step in order
 
 Usage:
-  python3 services/synthea/pipeline.py all --fhir-base http://localhost:8090/fhir
+  python3 services/synthea/pipeline.py all --fhir-base http://localhost:8090/baseR4
 
 Inputs are pinned in synthea.lock.json. Outputs are synthetic and stay out of git
 (services/synthea/output/ is ignored); output/manifest.json and
@@ -352,7 +352,7 @@ def run_all(args: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("step", choices=["fetch", "generate", "select", "import", "verify", "all"])
-    ap.add_argument("--fhir-base", default=os.environ.get("FHIR_BASE_URL", "http://localhost:8090/fhir"))
+    ap.add_argument("--fhir-base", default=os.environ.get("FHIR_BASE_URL", "http://localhost:8090/baseR4"))
     args = ap.parse_args()
     {"fetch": fetch, "generate": generate, "select": select, "import": do_import, "verify": verify, "all": run_all}[args.step](args)
 

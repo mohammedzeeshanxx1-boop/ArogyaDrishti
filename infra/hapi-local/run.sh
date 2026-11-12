@@ -4,7 +4,7 @@
 # The supported path is `docker compose up` (official hapiproject/hapi image +
 # PostgreSQL). This script exists because the C1 build environment could not
 # pull container images. It runs the official HAPI FHIR 5.7.0 CLI `run-server`
-# (a real HAPI JPA server; on-disk Derby database) and was used to produce the
+# (a real HAPI JPA server; on-disk H2 database) and was used to produce the
 # C1 evidence in CHECKPOINTS.md.
 #
 # Needs: curl, unzip, zip, a JDK >= 11 with javac (to build the patch tool) and

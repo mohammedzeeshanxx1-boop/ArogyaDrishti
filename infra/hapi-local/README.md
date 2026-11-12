@@ -2,7 +2,7 @@
 
 **Supported path:** `docker compose up`, which runs the official `hapiproject/hapi` image on PostgreSQL.
 
-**This fallback** runs the official HAPI FHIR **5.7.0** CLI `run-server` command, a real HAPI JPA server with an on-disk Derby database. It was used to produce the C1 evidence because the build environment could not pull container images (Docker Hub, GHCR, Quay, ECR and Maven Central were all denied by its network policy; GitHub release downloads were allowed).
+**This fallback** runs the official HAPI FHIR **5.7.0** CLI `run-server` command, a real HAPI JPA server with an on-disk H2 database. It was used to produce the C1 evidence because the build environment could not pull container images (Docker Hub, GHCR, Quay, ECR and Maven Central were all denied by its network policy; GitHub release downloads were allowed).
 
 ```bash
 JAVA11=/path/to/java11/bin/java infra/hapi-local/run.sh          # http://localhost:8090/baseR4
@@ -20,5 +20,5 @@ Observed on 2026-11-12: 92,335 classes scanned, 10 failed before the patch and 0
 ## Known differences from the Docker image
 
 - HAPI 5.7.0 instead of the newer image tag; base URL `/baseR4` instead of `/fhir`.
-- Derby instead of PostgreSQL. Persistence was verified across a restart of this server, not for the PostgreSQL volume.
+- H2 file database instead of PostgreSQL. Persistence was verified across a restart of this server, not for the PostgreSQL volume.
 - This build's `$validate` ignores the `?profile=` parameter and enforces only profiles declared in `meta.profile`. The API always declares the profile, so it is correct on either server.

@@ -6,24 +6,92 @@ Rule: a checkpoint is closed only with code, tests, the commands run and their a
 
 C0 and C1 scope were set by the project owner. C2 onward is a proposed split, not yet confirmed.
 
+Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-first adaptation" below. Container files are kept for later deployment.
+
 | ID | Scope | Status |
 |---|---|---|
-| C0 | Scaffold and service startup | Done, with blockers |
-| C1 | FHIR R4 Vital Signs ingestion and HAPI storage (requirement 1); Synthea discharge profiles (requirement 3) | Done on a local HAPI server; Docker path still blocked |
-| C2 | Virtual wearable simulator and BIDMC replay (requirement 2) | Not started |
+| C0 | Scaffold and service startup | PASS on localhost; container start BLOCKED (B2, deferred) |
+| C1 | FHIR R4 Vital Signs ingestion and HAPI storage (req. 1); Synthea discharge profiles (req. 3) | PASS on localhost with native HAPI |
+| C2 | Virtual wearable simulator and BIDMC replay (req. 2) | **Next.** Simulator unblocked; real BIDMC download BLOCKED in this workspace (B4) |
 | C3 | (requirement 3 was delivered in C1) | — |
-| C4 | NEWS2-style baseline and at least 2 personalization rules (requirement 4) | Not started |
-| C5 | Sensor artifact detection and false-alert suppression (requirement 5) | Not started |
-| C6 | Clinician dashboard, Watch/Review/Urgent alerts, explanations (requirement 6) | Not started |
-| C7 | Scenario replay and comparative performance report (requirement 7) | Not started |
+| C4 | NEWS2-style baseline and at least 2 personalization rules (req. 4) | Not started |
+| C5 | Sensor artifact detection and false-alert suppression (req. 5) | Not started |
+| C6 | Clinician dashboard, Watch/Review/Urgent alerts, explanations (req. 6) | Not started |
+| C7 | Scenario replay and comparative performance report (req. 7) | Not started |
 
 ## Open blockers
 
 | # | Blocked item | Status |
 |---|---|---|
 | B1 | PS-03 PDF not in the repository | Open |
-| B2 | Docker Hub (and GHCR, Quay, ECR, Maven Central) denied from the build environment; no container built or started | Open. C1 worked around it for HAPI only (see C1) |
-| B3 | `scripts/smoke.sh` never executed | Open (depends on B2) |
+| B2 | Container registries (Docker Hub, GHCR, Quay, ECR) and Maven Central denied from the build workspace; no container built or started | Deferred: development is localhost-first. Must be cleared before container deployment |
+| B3 | `scripts/smoke.sh` (container smoke test) never executed | Deferred with B2 |
+| B4 | Real BIDMC recordings cannot be downloaded in the build workspace: `physionet.org` and the `physionet-open` S3 bucket are both denied by its network policy (checked 2026-11-12) | Open; blocks the BIDMC half of C2 here. Clears if the files are added to the repo machine, or if PhysioNet is allowed for this workspace |
+
+---
+
+## Localhost-first adaptation (2026-11-12)
+
+Strategy change from the project owner: develop without Docker. Nothing completed was rebuilt; all existing code, APIs, the SQLite schema, the FHIR integration and the web app are unchanged in behaviour.
+
+### What changed
+
+| Change | Files |
+|---|---|
+| One env file of localhost URLs and ports, overridable by `.env.local` or the shell | `.env.local.example`, `scripts/dev/env.sh` |
+| Native start scripts: HAPI (Java 11), API (uvicorn), web (Vite) | `scripts/dev/start-{hapi,api,web}.sh` |
+| Background start with readiness waits, stop, health check, Synthea seeding, one-time setup | `scripts/dev/{up,down,health,seed,setup}.sh` |
+| Repo-local persistent storage, git-ignored: HAPI H2 database `.local/hapi/data`, HAPI jars `.local/hapi/work`, API SQLite `.local/api/app.db`, logs, pids, Java 11 runtime | `.local/` |
+| Defaults now point at localhost (`FHIR_BASE_URL=http://localhost:8090/baseR4`): API config, Synthea pipeline, persistence script, live tests, `check.sh` | as listed |
+| Container compatibility kept: Compose still sets `FHIR_BASE_URL=http://hapi-fhir:8080/fhir`; nginx still proxies to `api:8000`; `smoke.sh` remains the container smoke test, with a configurable `FHIR_URL` | `docker-compose.yml`, `infra/nginx`, `scripts/smoke.sh` |
+| Guard tests: no container hostnames in code that runs on localhost; env example covers every URL and port; API defaults are localhost; `.local/` and `.env.local` are ignored | `tests/test_scaffold.py` |
+| `check.sh` resolves the Python path itself (a relative `PYTHON=` path had broken the API steps, see FAIL below) | `scripts/check.sh` |
+| Correction: the HAPI 5.7 CLI server stores data in **H2**, not Derby as the C1 notes said | docs |
+
+The C1 HAPI database (8 Synthea patients plus ingested observations) was moved into `.local/hapi/data`, not regenerated.
+
+### Status by item
+
+| Item | Status | Evidence |
+|---|---|---|
+| React/Vite on http://localhost:5173 | PASS | health: page served, `/api` proxied, WebSocket heartbeat via proxy |
+| FastAPI on http://localhost:8000 | PASS | health: `/health`, SQLite event store, sees HAPI as R4 |
+| HAPI FHIR, native Java, persistent local storage | PASS | FHIR 4.0.1, HAPI 5.7.0 on `:8090/baseR4`; data survived a `down.sh`/`up.sh` restart (persistence check below) |
+| Synthea, native Java | PASS | `scripts/dev/seed.sh verify`: 8/8 profiles verified (generation itself ran natively in C1, byte-identical across two runs) |
+| Simulator as a local Python process | Not built yet (C2) | — |
+| Monitoring engine as a local Python process | Not built yet (C4/C5) | — |
+| BIDMC replay as a local Python process | Not built yet (C2); **real data BLOCKED here (B4)** | `physionet.org` connect rejected; S3 mirror "no rule allows host" |
+| Docker hostnames replaced by configurable localhost URLs | PASS | guard test passes; Compose/nginx keep container names as explicit overrides |
+| Full check suite on localhost defaults | PASS | see below |
+| Container stack | BLOCKED (B2), deferred | — |
+
+### Commands and actual results
+
+`scripts/dev/setup.sh`: venv and API requirements, `npm ci` (151 packages), Java 11.0.13 runtime into `.local/tools/jdk11`; 16 s. Java 21 found on PATH for Synthea.
+
+`scripts/dev/up.sh` (HAPI, API, web), 32 s, then health:
+```
+PASS     hapi   http://localhost:8090/baseR4/metadata -> FHIR 4.0.1 HAPI FHIR Server 5.7.0
+PASS     hapi   8 Synthea patients stored
+PASS     api    http://localhost:8000/health
+PASS     api    event store (SQLite /home/claude/arogyadrishti/.local/api/app.db)
+PASS     api    sees HAPI as R4
+PASS     web    http://localhost:5173/ serves the app
+PASS     web    proxies /api to http://localhost:8000
+PASS     web    WebSocket /ws/heartbeat via proxy
+HEALTH: no failures
+```
+
+`scripts/check.sh` with no URL overrides (`FHIR_BASE_URL` and `HAPI_TEST_FHIR_BASE` unset):
+
+| Run | Result |
+|---|---|
+| First run, invoked with relative `PYTHON=.venv/bin/python` | **FAIL** on both API steps: the interpreter path broke after `check.sh` changed into `apps/api`; other steps passed. Invocation error, not a code failure; `check.sh` now resolves the path |
+| Re-run | **PASS**: API unit/flow 66 passed; live HAPI 21 passed; scaffold/contract 28 passed; web type-check, 3 tests, build passed; Compose config valid. `ALL CHECKS PASSED` |
+
+Persistence through the dev scripts: `c1_persistence_check.py record` ingested 4 observations (one per vital), `scripts/dev/down.sh` stopped everything (health then reported `BLOCKED hapi not reachable`), `scripts/dev/up.sh hapi api` restarted, `check` → all 4 observations and 8 patients PASS, `PERSISTENCE CHECK PASSED`.
+
+Known log noise: on every restart against an existing H2 database, HAPI 5.7 logs Hibernate `WARN … Error executing DDL "create index …"` (index already exists). Startup completes and data is intact.
 
 ---
 
@@ -33,7 +101,7 @@ Run on 2026-11-12 in the same Linux cloud workspace as C0.
 
 ### How HAPI was run (read this first)
 
-Docker images still cannot be pulled here (B2), so the official `hapiproject/hapi` image on PostgreSQL defined in `docker-compose.yml` was **not** used. The C1 evidence comes from a real HAPI JPA server started from the **official HAPI FHIR 5.7.0 CLI release** (`run-server -v r4`, on-disk Derby database), downloaded from GitHub releases and checked by SHA-256.
+Docker images still cannot be pulled here (B2), so the official `hapiproject/hapi` image on PostgreSQL defined in `docker-compose.yml` was **not** used. The C1 evidence comes from a real HAPI JPA server started from the **official HAPI FHIR 5.7.0 CLI release** (`run-server -v r4`, on-disk H2 database), downloaded from GitHub releases and checked by SHA-256.
 
 Two things were needed to start it, both scripted in `infra/hapi-local/run.sh` and explained in `infra/hapi-local/README.md`:
 - It runs on a Java 11 runtime (OpenJDK 11.0.13 Temurin, installed from PyPI package `jdk4py==11.0.13.1`).
