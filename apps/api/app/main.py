@@ -825,11 +825,8 @@ def create_app(
             return {"ready": False, "session": pub}
         cache = request.app.state.__dict__.setdefault("sensor_lab_cache", {})
         if sid not in cache:
-            readings, _ = await evaluation.session_readings(fhir(request), sid)
             eligible = await scale2.cached_eligible(fhir(request), s.patient_id)
-            analysis = await asyncio.to_thread(early_detection.analyse, readings, eligible)
-            truth = replay_store.ground_truth(settings.sqlite_path, sid)        # read only after detection has run
-            cache[sid] = {"analysis": analysis, "metrics": sensor_lab.metrics(analysis, truth), "scenario": s.params.get("scenario")}
+            cache[sid] = {**await sensor_lab.evaluate_run(fhir(request), settings.sqlite_path, sid, eligible), "scenario": s.params.get("scenario")}
         return {"ready": True, "session": pub, **cache[sid]}
 
     @app.get("/api/monitoring/status")

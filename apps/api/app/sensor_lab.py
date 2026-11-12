@@ -18,7 +18,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import detector
+import asyncio
+
+from . import detector, early_detection
+from .evaluation import session_readings
+from .replay import store
 
 
 def _t(s: str) -> datetime:
@@ -95,3 +99,11 @@ def metrics(a: dict, truth: list[dict]) -> dict:
                    "genuineDeterioration": genuine(eng_eps), "episodes": eng_eps},
         "falseAlertsAvoided": comp_false - eng_false if comp_false > eng_false else 0,
     }
+
+
+async def evaluate_run(fhir, db_path: str, session_id: str, scale2: bool) -> dict:
+    """Detection on the stored readings first; the scenario labels are read only afterwards (evaluation only)."""
+    readings, _ = await session_readings(fhir, session_id)
+    analysis = await asyncio.to_thread(early_detection.analyse, readings, scale2)
+    truth = store.ground_truth(db_path, session_id)
+    return {"analysis": analysis, "metrics": metrics(analysis, truth)}
