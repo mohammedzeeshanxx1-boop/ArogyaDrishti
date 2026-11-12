@@ -1,0 +1,37 @@
+{
+  "comment": "Pinned inputs for a reproducible Synthea run. Changing anything here changes the cohort.",
+  "synthea": {
+    "version": "v3.4.0",
+    "url": "https://github.com/synthetichealth/synthea/releases/download/v3.4.0/synthea-with-dependencies.jar",
+    "sha256": "38678aab1e667d26671163824aad60ee5e30fa366f3d59d5ea5765ebb5702432"
+  },
+  "run": {
+    "seed": 20260301,
+    "clinicianSeed": 20260301,
+    "referenceDate": "20261101",
+    "population": 12,
+    "ageRange": "55-85",
+    "state": "Massachusetts",
+    "yearsOfHistory": 5
+  },
+  "selection": {
+    "rule": "alive AND >=1 inpatient Encounter (class IMP) with period.end AND >=1 active Condition AND >=1 active MedicationRequest",
+    "order": "most recent inpatient discharge first, then Synthea UUID",
+    "minimumCohort": 5
+  },
+  "import": {
+    "resourceTypes": [
+      "Patient",
+      "Encounter",
+      "Condition",
+      "MedicationRequest",
+      "Medication",
+      "AllergyIntolerance",
+      "CarePlan",
+      "CareTeam",
+      "Observation"
+    ],
+    "observationCategory": "vital-signs",
+    "comment": "Claims, EOBs, labs, procedures, imaging, documents and provenance are not imported. Entries are converted from POST to PUT with id = Synthea UUID so imports are idempotent and Patient ids are stable."
+  }
+}

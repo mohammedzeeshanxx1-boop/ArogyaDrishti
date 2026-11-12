@@ -1,6 +1,6 @@
 # Architecture
 
-Status key: **built** exists at C0; **planned** does not exist yet.
+Status key: **built** exists and is tested; **planned** does not exist yet.
 
 ```
 browser ──HTTP/WS──> web (nginx + React) ──/api, /ws──> api (FastAPI)
@@ -13,7 +13,7 @@ browser ──HTTP/WS──> web (nginx + React) ──/api, /ws──> api (Fas
 ## Data ownership
 
 - **HAPI FHIR** is the only store for clinical data: Patient, Condition, MedicationRequest, Observation.
-- **SQLite** holds app-only metadata (schema version at C0; later, alert and replay bookkeeping). It never holds FHIR resources.
+- **SQLite** holds app-only metadata: the schema version and the ingestion event log (accepted and rejected submissions; rejected payloads only as a SHA-256). It never holds FHIR resources.
 
 ## Components
 
@@ -22,10 +22,12 @@ browser ──HTTP/WS──> web (nginx + React) ──/api, /ws──> api (Fas
 | Service shell: health, meta, status, heartbeat socket | `apps/api/app` | built |
 | HAPI connectivity probe (`/fhir/metadata`, R4 check) | `apps/api/app/fhir.py` | built |
 | Dashboard shell with live service status | `apps/web/src` | built |
-| Vital Signs ingestion to HAPI | `apps/api` | planned (C1) |
+| Vital Signs ingestion: strict validation, HAPI `$validate`, store, read-back | `apps/api/app/ingest.py`, `vitals.py` | built (C1) |
+| Patients and discharge profiles | `apps/api/app/patients.py` | built (C1) |
+| FHIR Inspector | `apps/api/app/main.py` (`/api/inspector/*`) | built (C1) |
 | Virtual wearable simulator | `apps/api` | planned (C2) |
 | BIDMC replay | `services/bidmc` | planned (C2) |
-| Synthea profiles | `services/synthea` | planned (C3) |
+| Synthea generation and import pipeline | `services/synthea` | built (C1) |
 | NEWS2-style baseline scorer | `apps/api` | planned (C4) |
 | Patient-specific deterioration trend engine (personalization rules) | `apps/api` | planned (C4) |
 | Sensor Trust Engine (artifact detection, alert suppression) | `apps/api` | planned (C5) |

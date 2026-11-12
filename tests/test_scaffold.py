@@ -38,8 +38,27 @@ def test_required_path_exists(rel):
     assert (ROOT / rel).exists(), f"missing {rel}"
 
 
-def test_compose_has_exactly_the_four_services(compose):
-    assert set(compose["services"]) == {"web", "api", "hapi-fhir", "database"}
+def test_default_stack_is_exactly_the_four_services(compose):
+    default = {n for n, svc in compose["services"].items() if not svc.get("profiles")}
+    assert default == {"web", "api", "hapi-fhir", "database"}
+
+
+def test_synthea_import_is_an_opt_in_job_pointing_at_hapi(compose):
+    job = compose["services"]["synthea-import"]
+    assert job["profiles"] == ["seed"]
+    assert job["environment"]["FHIR_BASE_URL"] == "http://hapi-fhir:8080/fhir"
+
+
+def test_hapi_accepts_client_assigned_ids_for_synthea_put(compose):
+    assert compose["services"]["hapi-fhir"]["environment"]["hapi.fhir.client_id_strategy"] == "ALPHANUMERIC"
+
+
+def test_synthea_inputs_are_pinned():
+    import json
+    lock = json.loads((ROOT / "services/synthea/synthea.lock.json").read_text())
+    assert lock["synthea"]["version"].startswith("v")
+    assert re.fullmatch(r"[0-9a-f]{64}", lock["synthea"]["sha256"])
+    assert isinstance(lock["run"]["seed"], int) and lock["selection"]["minimumCohort"] >= 5
 
 
 def test_hapi_is_r4_and_persists_to_postgres(compose):
