@@ -1,42 +1,42 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
-const status = {
-  checkedAt: "2026-11-12T08:00:00Z",
-  checkpoint: "C1",
-  services: { api: { status: "ok" }, fhir: { status: "ok", isR4: true, fhirVersion: "4.0.1" }, eventStore: { status: "ok" } },
-};
-const patients = {
-  count: 1,
-  patients: [{ id: "p1", name: "Ariane992 Kirlin939", gender: "female", age: 57, lastDischarge: "2026-08-19T00:00:00Z", activeConditions: 11, activeMedications: 4 }],
+const now = new Date().toISOString();
+const status = { checkedAt: now, services: { api: { status: "ok" }, fhir: { status: "ok", isR4: true, fhirVersion: "4.0.1" }, eventStore: { status: "ok" } } };
+const source = { status: "receiving", lastIngestionAt: now, secondsSinceLastIngestion: 3, latestSourceLabel: "Arogya Drishti virtual wearable (simulated)", simulatedSourcesRunning: [], physicalDevicesConnected: 0 };
+const baseMon = { recentWindowMinutes: 60, staleAfterMinutes: 15, requiredTrustedVitals: 3 };
+const overview = {
+  generatedAt: now, recentWindowMinutes: 60, staleAfterMinutes: 15,
+  patients: [
+    { id: "p1", name: "Ariane992 Kirlin939", gender: "female", age: 57, lastDischarge: "2026-08-19T00:00:00Z", activeConditions: 11, activeMedications: 4,
+      monitoring: { ...baseMon, assessable: true, level: "URGENT", monitoringStatus: "active", lastObservationAt: now, trustedVitals: 4, topReason: "SpO2 88 % scores 3.",
+        latest: { heart_rate: { value: 134, effective: now, observation: "Observation/1", score: 3, baseline: null }, spo2: { value: 88, effective: now, observation: "Observation/2", score: 3, baseline: null } } } },
+    { id: "p2", name: "Victor265 Ernser583", gender: "male", age: 82, lastDischarge: "2026-06-04T00:00:00Z", activeConditions: 22, activeMedications: 12,
+      monitoring: { ...baseMon, assessable: false, level: null, monitoringStatus: "no_recent_data", lastObservationAt: null, trustedVitals: 0, latest: {} } },
+  ],
 };
 const profile = {
   patient: { id: "p1", name: "Ariane992 Kirlin939", gender: "female", age: 57, birthDate: "1969-08-12" },
   discharge: { encounter: "Encounter/e1", discharged: "2026-08-19T00:00:00Z", facility: "Test Hospital", inpatientStays: 1 },
-  activeConditions: [{ id: "c1", condition: "Essential hypertension (disorder)" }],
-  activeMedications: [{ id: "m1", medication: "metoprolol succinate 100 MG" }],
+  activeConditions: [{ id: "c1", condition: "Ischemic heart disease (disorder)" }],
+  activeMedications: [{ id: "m1", medication: "clopidogrel 75 MG Oral Tablet" }],
   allergies: [],
 };
-const empty = { label: "x", unit: "/min", series: [], latest: null };
+const series = (v: number) => [{ effective: now, value: v - 1, observation: "Observation/9" }, { effective: now, value: v, observation: "Observation/10" }];
+const vit = (label: string, unit: string, v: number) => ({ label, unit, series: series(v), latest: series(v)[1] });
 const monitor = {
-  patientId: "p1",
-  windowStart: "2026-11-12T08:00:00Z",
-  evaluatedAt: "2026-11-12T08:01:00Z",
-  observationCount: 1,
-  vitals: {
-    heart_rate: { label: "Heart rate", unit: "/min", series: [{ effective: "2026-11-12T08:00:30Z", value: 134, observation: "Observation/42" }], latest: { effective: "2026-11-12T08:00:30Z", value: 134, observation: "Observation/42" } },
-    spo2: empty, respiratory_rate: empty, body_temperature: empty,
-  },
+  patientId: "p1", windowStart: now, evaluatedAt: now, observationCount: 8,
+  vitals: { heart_rate: vit("Heart rate", "/min", 134), spo2: vit("SpO2", "%", 88), respiratory_rate: vit("Respiratory rate", "/min", 31), body_temperature: vit("Temperature", "°C", 39.3) },
   risk: {
-    level: "URGENT",
-    readingsConsidered: 1,
-    label: "Prototype rules engine (Round 1 MVP). Not NEWS2.",
-    summary: "Latest heart rate 134 /min meets the URGENT band (Heart rate ≥ 131 /min).",
-    alerts: [{ level: "URGENT", ruleType: "threshold", vital: "heart_rate", vitalLabel: "Heart rate", value: 134, unit: "/min", rule: "Heart rate ≥ 131 /min", observation: "Observation/42", effective: "2026-11-12T08:00:30Z", reason: "Latest heart rate 134 /min meets the URGENT band (Heart rate ≥ 131 /min)." }],
+    level: "URGENT", readingsConsidered: 8, label: "NEWS2-style score (partial: 4 of 7 parameters) ... not clinically validated.",
+    summary: "x", suppressed: [], suppressedCount: 0,
+    alerts: [{ level: "URGENT", ruleType: "news2-aggregate", vital: null, vitalLabel: "NEWS2-style aggregate", value: 11, unit: "points", rule: "≥7 URGENT", observation: "Observation/10", effective: now, reason: "NEWS2-style partial aggregate 11." }],
+    news2: { total: 11, level: "URGENT", measuredParameters: 4, of: 7, partial: true, spo2Scale: 1, notAvailable: ["systolic blood pressure", "air or oxygen", "consciousness (ACVPU)"],
+      parameters: { heart_rate: { score: 3, value: 134, observation: "Observation/10", effective: now, bands: "Pulse", baseline: { median: 76, mad: 2, n: 40, from: now, to: now } } } },
   },
-  fhirProof: { observation: "Observation/42", id: "42", versionId: "1", lastUpdated: "2026-11-12T08:00:31Z", hapiUrl: "http://localhost:8090/baseR4/Observation/42", readBackMatches: true, hapiValidationErrors: 0 },
-  simulator: null,
+  assessment: { ...baseMon, assessable: true, level: "URGENT", monitoringStatus: "active", lastObservationAt: now, trustedVitals: 4, latest: {}, sources: ["Arogya Drishti virtual wearable (simulated)"] },
+  scale2: { patientId: "p1", scale: 1, eligible: false, rule: "", flag: null, supportingConditions: [] },
 };
 
 function routeFetch(map: Record<string, unknown>) {
@@ -47,64 +47,86 @@ function routeFetch(map: Record<string, unknown>) {
   });
 }
 
+class FailingSocket {
+  onmessage: unknown = null; onerror: (() => void) | null = null; onclose: (() => void) | null = null;
+  constructor() { setTimeout(() => this.onerror?.(), 0); }
+  close() {}
+}
+
+const DEMO_WORDS = /judge|demonstrate|replay|evaluation|round 1|seed|fingerprint|acceptance/i;
+
+beforeEach(() => { window.location.hash = ""; vi.stubGlobal("WebSocket", FailingSocket); });
 afterEach(() => vi.unstubAllGlobals());
 
-describe("Round 1 dashboard", () => {
-  it("always shows brand and disclaimer, even when the API is down", async () => {
+describe("clinician dashboard", () => {
+  it("shows brand, subtitle and disclosures even when the backend is down", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     render(<App />);
     expect(screen.getByRole("heading", { level: 1, name: "AROGYA DRISHTI" })).toBeInTheDocument();
-    expect(screen.getByRole("note")).toHaveTextContent("Clinical decision support only. Not for medical diagnosis.");
-    await waitFor(() => expect(screen.getByTestId("fhir-status")).toHaveTextContent("API unreachable"));
+    expect(screen.getByText("Personalized Post-Discharge Patient Monitoring")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(/Clinical decision support only.*synthetic patients.*not clinically validated/);
+    await waitFor(() => expect(screen.getByTestId("status-api")).toHaveTextContent("Unreachable"));
   });
 
-  it("renders patients, profile, risk, explanations and FHIR proof from the API", async () => {
+  it("lists patients from the API and never shows NORMAL without data", async () => {
+    vi.stubGlobal("fetch", routeFetch({ "/api/v1/status": status, "/api/monitoring/status": source, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
+    render(<App />);
+    const cards = await screen.findAllByTestId("patient-card");
+    expect(cards).toHaveLength(2);
+    expect(within(cards[0]).getByText("Ariane Kirlin")).toBeInTheDocument();
+    expect(within(cards[0]).getByText("URGENT")).toBeInTheDocument();
+    expect(within(cards[1]).getByText("Not assessed")).toBeInTheDocument();
+    expect(within(cards[1]).getByText("No recent data")).toBeInTheDocument();
+    expect(within(cards[1]).queryByText("NORMAL")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("status-fhir")).toHaveTextContent("Connected (R4 4.0.1)"));
+    expect(screen.getByTestId("status-source")).toHaveTextContent("simulated source");
+    expect(document.body.textContent).not.toMatch(DEMO_WORDS);
+  });
+
+  it("filters by risk and searches by name", async () => {
+    vi.stubGlobal("fetch", routeFetch({ "/api/v1/status": status, "/api/monitoring/status": source, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
+    render(<App />);
+    await screen.findAllByTestId("patient-card");
+    fireEvent.click(screen.getByRole("button", { name: /Not assessed/ }));
+    expect(screen.getAllByTestId("patient-card")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /^All$/ }));
+    fireEvent.change(screen.getByPlaceholderText("Search by name"), { target: { value: "victor" } });
+    expect(screen.getAllByTestId("patient-card")).toHaveLength(1);
+  });
+
+  it("shows the patient detail with risk reasons, baseline and polling fallback", async () => {
+    window.location.hash = "#/patient/p1";
     vi.stubGlobal("fetch", routeFetch({
-      "/api/v1/status": status,
-      "/api/patients/p1/profile": profile,
-      "/api/patients": patients,
-      "/api/demo/monitor/p1": monitor,
+      "/api/v1/status": status, "/api/monitoring/status": source, "/api/patients/p1/profile": profile,
+      "/api/demo/monitor/p1": monitor, "/api/alerts": { alerts: [] },
     }));
     render(<App />);
     await waitFor(() => expect(screen.getByTestId("patient-name")).toHaveTextContent("Ariane Kirlin"));
-    expect(screen.getByText(/Essential hypertension/)).toBeInTheDocument();
-    expect(screen.getByText(/metoprolol/)).toBeInTheDocument();
+    expect(screen.getByText("Ischemic heart disease")).toBeInTheDocument();
+    expect(screen.getByText(/clopidogrel/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("risk-level")).toHaveTextContent("URGENT"));
-    expect(screen.getAllByText(/Heart rate ≥ 131 \/min/).length).toBeGreaterThan(0);
-    expect(screen.getByTestId("fhir-proof")).toHaveTextContent("Observation/42");
-    expect(screen.getByTestId("fhir-status")).toHaveTextContent("HAPI FHIR R4 connected · 4.0.1");
+    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("NEWS2-style partial aggregate 11.");
+    expect(screen.getByText(/Partial NEWS2-style score/)).toBeInTheDocument();
+    expect(screen.getByTestId("vital-heart_rate")).toHaveTextContent("Personal baseline 76 /min (+58)");
+    await waitFor(() => expect(screen.getByTestId("live-mode")).toHaveTextContent("Updating every few seconds"));
+    expect(document.body.textContent).not.toMatch(DEMO_WORDS);
   });
 
-  it("shows NORMAL and an empty state when there are no observations", async () => {
+  it("shows an honest empty state when a patient has no readings", async () => {
+    window.location.hash = "#/patient/p1";
+    const empty = { label: "x", unit: "/min", series: [], latest: null };
     vi.stubGlobal("fetch", routeFetch({
-      "/api/v1/status": status,
-      "/api/patients/p1/profile": profile,
-      "/api/patients": patients,
-      "/api/demo/monitor/p1": { ...monitor, observationCount: 0, vitals: { heart_rate: empty, spo2: empty, respiratory_rate: empty, body_temperature: empty }, risk: { level: "NORMAL", alerts: [], readingsConsidered: 0, label: "x", summary: "No observations in this monitoring window yet." }, fhirProof: null },
+      "/api/v1/status": status, "/api/monitoring/status": { ...source, status: "none", lastIngestionAt: null },
+      "/api/patients/p1/profile": profile, "/api/alerts": { alerts: [] },
+      "/api/demo/monitor/p1": { ...monitor, observationCount: 0,
+        vitals: { heart_rate: empty, spo2: empty, respiratory_rate: empty, body_temperature: empty },
+        risk: { ...monitor.risk, level: "NORMAL", alerts: [], news2: { ...monitor.risk.news2, total: 0, parameters: {} } },
+        assessment: { ...monitor.assessment, assessable: false, level: null, monitoringStatus: "no_recent_data", trustedVitals: 0, sources: [] } },
     }));
     render(<App />);
-    await waitFor(() => expect(screen.getByTestId("risk-level")).toHaveTextContent("NORMAL"));
-    expect(screen.getByText(/No observation stored in this monitoring window yet/)).toBeInTheDocument();
-  });
-
-  it("shows replay session state, progress and HAPI confirmation", async () => {
-    const replay = {
-      sessionId: "abc123", patientId: "p1", source: "simulated", description: "x", scenario: "deterioration",
-      scenarioName: "Gradual Deterioration", seed: 2002, durationMinutes: 120, intervalSeconds: 60, speed: "10x",
-      state: "paused", anchor: "2026-11-12T06:00:00Z", endsAt: "2026-11-12T08:00:00Z", simulatedNow: "2026-11-12T06:30:00Z",
-      eventsTotal: 484, cursor: 124, persisted: 124, created: 124, existing: 0, progress: 0.256, batches: 31,
-      failedBatches: 0, lastError: null, fingerprint: "deadbeefcafe0000", resetFrom: null,
-    };
-    vi.stubGlobal("fetch", routeFetch({
-      "/api/v1/status": status,
-      "/api/patients/p1/profile": profile,
-      "/api/patients": patients,
-      "/api/demo/monitor/p1": { ...monitor, replay },
-    }));
-    render(<App />);
-    await waitFor(() => expect(screen.getByTestId("replay-state")).toHaveTextContent("paused"));
-    expect(screen.getByTestId("replay-status")).toHaveTextContent("124/484 observations confirmed by HAPI");
-    expect(screen.getByRole("button", { name: "Resume replay" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Pause replay" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByTestId("risk-not-assessed")).toHaveTextContent("Risk is not assessed without data"));
+    expect(screen.queryByTestId("risk-level")).toBeNull();
+    expect(screen.getByText(/No vital-sign readings received/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("status-source")).toHaveTextContent("No source connected"));
   });
 });

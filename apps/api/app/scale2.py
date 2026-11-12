@@ -43,6 +43,19 @@ async def cached_status(fhir: FhirClient, pid: str) -> dict:
     return s
 
 
+_elig: dict[str, tuple[float, bool]] = {}
+
+
+async def cached_eligible(fhir: FhirClient, pid: str) -> bool:
+    """Only the Flag lookup (fast); used where supporting conditions are not displayed."""
+    hit = _elig.get(pid)
+    if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
+        return hit[1]
+    ok = await active_flag(fhir, pid) is not None
+    _elig[pid] = (time.monotonic(), ok)
+    return ok
+
+
 async def status(fhir: FhirClient, pid: str) -> dict:
     flag = await active_flag(fhir, pid)
     conds = await fhir.search("Condition", {"subject": f"Patient/{pid}", "clinical-status": "active", "_count": 200})
@@ -63,6 +76,7 @@ async def status(fhir: FhirClient, pid: str) -> dict:
 
 async def set_flag(fhir: FhirClient, pid: str, prescribed_by: str, reason: str) -> dict:
     _cache.pop(pid, None)
+    _elig.pop(pid, None)
     if await active_flag(fhir, pid):
         return await status(fhir, pid)
     flag = {
@@ -79,11 +93,13 @@ async def set_flag(fhir: FhirClient, pid: str, prescribed_by: str, reason: str) 
     if r.status != 201:
         raise ValueError(f"HAPI did not store the Flag (HTTP {r.status})")
     _cache.pop(pid, None)
+    _elig.pop(pid, None)
     return await status(fhir, pid)
 
 
 async def clear_flag(fhir: FhirClient, pid: str) -> dict:
     _cache.pop(pid, None)
+    _elig.pop(pid, None)
     flag = await active_flag(fhir, pid)
     if flag:
         flag = {**flag, "status": "inactive"}
@@ -92,4 +108,5 @@ async def clear_flag(fhir: FhirClient, pid: str) -> dict:
         if r.status not in (200, 201):
             raise ValueError(f"HAPI did not update the Flag (HTTP {r.status})")
     _cache.pop(pid, None)
+    _elig.pop(pid, None)
     return await status(fhir, pid)

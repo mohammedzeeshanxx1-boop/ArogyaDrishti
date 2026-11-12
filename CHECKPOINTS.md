@@ -31,6 +31,45 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## Clinician-facing base prototype (2026-11-12, branch feature/clinical-dashboard)
+
+Checkpoint before changes: branch `checkpoint/pre-clinical-ui` (= main `b592bd7`).
+
+UI: hackathon controls removed from the dashboard (judge controls, demo and replay buttons, evaluation tables, Evidence Console, seeds and fingerprints, "Round 1 MVP"). Their backend endpoints and scripts are kept as developer utilities (docs/DEVELOPMENT.md). New: patient overview (search, risk filter, monitoring status, latest vitals, last reading), patient detail (demographics, discharge, conditions, medications, trusted vitals with personal baselines and trends, risk assessment with reasons, thresholds, source Observations and data reliability, alert history, SpO₂ Scale 2 configuration), header status (backend, FHIR server, monitoring source, last update).
+
+Backend additions: `app/monitoring.py` (server-side assessment after every accepted ingestion and replay batch; alert events stored on level change; no fabricated NORMAL without data), `GET /api/clinical/overview`, `GET /api/alerts`, `GET /api/monitoring/status`, `scripts/dev/simulate.sh`. Scoring thresholds, the safety floor, artifact suppression and baselines are unchanged.
+
+Performance: the live queries now send only subject and date to HAPI and filter code and tag in Python (measured 0.16-0.32 s vs 0.7-2.9 s); overview 39 s → about 2 s; monitor 2.5 s → 0.85 s.
+
+Acceptance (`scripts/acceptance.py`, this Linux workspace, not macOS):
+
+| Check | Status |
+|---|---|
+| services up | PASS |
+| patients 8 | PASS |
+| live simulation | PASS |
+| levels seen | PASS |
+| alert events | PASS |
+| overview status | PASS |
+| no data not normal | PASS |
+| monitoring source status | PASS |
+| fhir readback | PASS |
+| explanations | PASS |
+| news2 scoring | PASS |
+| websocket updates | PASS |
+| scale2 | PASS |
+| personal baselines | PASS |
+| artifact suppression | PASS |
+| replay lab | PASS |
+| bidmc replay | BLOCKED |
+| evidence console | PASS |
+
+Tests: `scripts/check.sh`: 121 unit, 28 live HAPI, 28 repo, 5 web, type-check, build: ALL CHECKS PASSED. Browser (desktop 1440 px and mobile 390 px): 8 patient cards, no demo wording, no horizontal overflow, detail page "Live updates" via WebSocket, 0 console errors. The polling fallback is covered by a web test.
+
+Not verified here: macOS startup (this workspace cannot reach the user's Mac; the macOS setup path was verified earlier in a macOS-like simulation only). Limitations unchanged: BIDMC BLOCKED, NEWS2 bands unverified against the RCP PDF, simulated monitoring data, no alert acknowledgement workflow.
+
+---
+
 ## Phase 7: end-to-end acceptance (2026-11-12)
 
 Command: `.venv/bin/python scripts/acceptance.py --with-tests` (run 2026-11-12T14:59:28 UTC on this Linux workspace at commit d0b780c; **not run on the macOS machine**, which this workspace cannot reach). Raw report: `docs/acceptance-latest.json`. Result: 14 PASS, 0 FAIL, 1 BLOCKED.

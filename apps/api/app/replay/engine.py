@@ -222,6 +222,8 @@ class ReplaySession:
             self.existing += res.existing
             self.cursor = end
             self._save()
+            if getattr(self, "on_batch", None):
+                self.on_batch(self.patient_id)
         self.state = "completed"
         self.finished_at = _now().isoformat()
         self.clock.pause()
@@ -230,7 +232,8 @@ class ReplaySession:
 
 class ReplayManager:
     def __init__(self, fhir: FhirClient, db_path: str, legacy_busy: Callable[[], bool] = lambda: False,
-                 monotonic: Callable[[], float] = time.monotonic):
+                 monotonic: Callable[[], float] = time.monotonic, on_batch: Callable[[str], None] | None = None):
+        self.on_batch = on_batch    # called with the patient id after every HAPI-confirmed batch
         self.fhir = fhir
         self.db_path = db_path
         self.legacy_busy = legacy_busy
@@ -256,6 +259,7 @@ class ReplayManager:
                           params={"scenario": scenario, "seed": seed, "durationMinutes": duration, "intervalSeconds": interval,
                                   "batchSize": batch_size},
                           monotonic=self.monotonic)
+        s.on_batch = self.on_batch
         self.sessions[s.id] = s
         return s
 

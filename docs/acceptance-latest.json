@@ -1,8 +1,8 @@
 {
-  "ranAt": "2026-11-12T14:59:28.845584+00:00",
-  "finishedAt": "2026-11-12T15:04:30.568551+00:00",
-  "commit": "d0b780c085eb9204f17f93d669e3f434f0d2b57b",
-  "command": "scripts/acceptance.py --with-tests",
+  "ranAt": "2026-11-12T16:44:09.673008+00:00",
+  "finishedAt": "2026-11-12T16:47:50.542136+00:00",
+  "commit": "4e0d637e19e82c0a56c351dadd5bfe8601dda2ea",
+  "command": "scripts/acceptance.py",
   "platform": "linux",
   "api": "http://localhost:8000",
   "web": "http://localhost:5173",
@@ -22,11 +22,27 @@
     },
     "levels_seen": {
       "status": "PASS",
-      "evidence": "NORMAL@3.0s \u2192 WATCH@8.9s \u2192 REVIEW@15.0s \u2192 URGENT@18.5s"
+      "evidence": "NORMAL@1.6s \u2192 WATCH@10.2s \u2192 REVIEW@14.3s \u2192 URGENT@18.4s"
+    },
+    "alert_events": {
+      "status": "PASS",
+      "evidence": "3 alert events recorded server-side for this patient; recent sequence: WATCH \u2192 REVIEW \u2192 URGENT; e.g. \"NEWS2-style partial aggregate 8 (from 4 of 7 parameters; a single parameter scores 3).\""
+    },
+    "overview_status": {
+      "status": "PASS",
+      "evidence": "overview: 8 patients; this patient URGENT / active"
+    },
+    "no_data_not_normal": {
+      "status": "PASS",
+      "evidence": "patient without recent readings: status no_recent_data, level None (no fabricated NORMAL)"
+    },
+    "monitoring_source_status": {
+      "status": "PASS",
+      "evidence": "status receiving, label 'Arogya Drishti virtual wearable (simulated)', physical devices 0"
     },
     "fhir_readback": {
       "status": "PASS",
-      "evidence": "Observation/52936: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0"
+      "evidence": "Observation/63131: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0"
     },
     "explanations": {
       "status": "PASS",
@@ -38,11 +54,11 @@
     },
     "websocket_updates": {
       "status": "PASS",
-      "evidence": "direct pushes [(1, 'URGENT', '2026-11-12T15:00:22.626080+00:00'), (2, 'URGENT', '2026-11-12T15:00:25.322663+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')]"
+      "evidence": "direct pushes [(1, 'URGENT', '2026-11-12T16:45:20.161729+00:00'), (2, 'URGENT', '2026-11-12T16:45:20.924839+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')]"
     },
     "scale2": {
       "status": "PASS",
-      "evidence": "SpO2 87.0%: Scale 1 score 3 \u2192 after FHIR Flag/53181 Scale 2 score 1 (total 10\u21928) \u2192 flag cleared, Scale 1"
+      "evidence": "SpO2 87.0%: Scale 1 score 3 \u2192 after FHIR Flag/63376 Scale 2 score 1 (total 10\u21928) \u2192 flag cleared, Scale 1"
     },
     "personal_baselines": {
       "status": "PASS",
@@ -59,10 +75,6 @@
     "bidmc_replay": {
       "status": "BLOCKED",
       "evidence": "no genuine PhysioNet BIDMC files in services/bidmc/data; no substitute data used"
-    },
-    "unit_integration_frontend": {
-      "status": "PASS",
-      "evidence": "116 passed, 28 deselected in 7.09s; 28 passed, 116 deselected in 99.06s (0:01:39); 28 passed in 0.05s; Test Files  1 passed (1); Tests  4 passed (4); ALL CHECKS PASSED"
     },
     "evidence_console": {
       "status": "PASS",

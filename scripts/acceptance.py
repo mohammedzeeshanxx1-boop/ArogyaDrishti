@@ -141,6 +141,31 @@ def live_simulation(pid):
     return last
 
 
+@guard("clinical_workflow")
+def clinical_workflow(pid, idle_pid):
+    """Server-side assessment and alert events after the live simulation, plus the clinician views."""
+    time.sleep(3)
+    _, al = call("GET", f"{API}/api/alerts?patient={pid}&limit=50")
+    events = (al or {}).get("alerts", [])
+    levels = [e["level"] for e in reversed(events)]
+    _, ov = call("GET", f"{API}/api/clinical/overview")
+    me = next((p for p in (ov or {}).get("patients", []) if p["id"] == pid), None)
+    idle = next((p for p in (ov or {}).get("patients", []) if p["id"] == idle_pid), None)
+    _, src = call("GET", f"{API}/api/monitoring/status")
+    ok_alerts = {"WATCH", "REVIEW", "URGENT"} <= set(levels) and all(e["reason"] and e["observation"] for e in events if e["level"] != "NORMAL")
+    record("alert_events", "PASS" if ok_alerts else "FAIL",
+           f"{len(events)} alert events recorded server-side for this patient; recent sequence: {' → '.join(levels[-6:])}; e.g. \"{events[0]['reason'][:90] if events else ''}\"")
+    ok_ov = me and me["monitoring"]["assessable"] and me["monitoring"]["level"] == "URGENT" and me["monitoring"]["monitoringStatus"] == "active"
+    record("overview_status", "PASS" if ok_ov else "FAIL",
+           f"overview: {len((ov or {}).get('patients', []))} patients; this patient {me['monitoring']['level'] if me else None} / {me['monitoring']['monitoringStatus'] if me else None}")
+    if idle:
+        ok_idle = idle["monitoring"]["level"] is None and not idle["monitoring"]["assessable"] or idle["monitoring"]["monitoringStatus"] != "no_recent_data"
+        record("no_data_not_normal", "PASS" if ok_idle else "FAIL",
+               f"patient without recent readings: status {idle['monitoring']['monitoringStatus']}, level {idle['monitoring']['level']} (no fabricated NORMAL)")
+    record("monitoring_source_status", "PASS" if (src or {}).get("status") == "receiving" and "simulated" in str(src.get("latestSourceLabel")) else "FAIL",
+           f"status {(src or {}).get('status')}, label {(src or {}).get('latestSourceLabel')!r}, physical devices {(src or {}).get('physicalDevicesConnected')}")
+
+
 @guard("fhir_readback")
 def fhir_readback(m, pid):
     oid = m["fhirProof"]["id"]
@@ -300,6 +325,7 @@ def main():
         if len(pts) >= 4:
             m = live_simulation(pts[0]["id"])
             if m:
+                clinical_workflow(pts[0]["id"], pts[-1]["id"])
                 fhir_readback(m, pts[0]["id"])
                 explanations(m)
                 news2(m)
