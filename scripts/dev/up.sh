@@ -6,6 +6,24 @@ set -uo pipefail
 . "$(dirname "$0")/env.sh"
 want="${*:-hapi api web}"
 
+# ---------------------------------------------------------------- preflight: fail fast with the fix
+pre=0
+need() { printf "BLOCKED  %s\n         fix: %s\n" "$1" "$2"; pre=1; }
+case " $want " in *" api "*)
+  if [ -z "$PY" ]; then need "api: no Python >= 3.10 venv (.venv)" "scripts/dev/setup.sh  (macOS: brew install python@3.12 first)"
+  elif ! "$PY" -c 'import fastapi, uvicorn, httpx' 2>/dev/null; then need "api: packages missing in .venv" "scripts/dev/setup.sh"; fi ;;
+esac
+case " $want " in *" web "*)
+  if ! command -v node >/dev/null 2>&1; then need "web: node not found" "brew install node@22"
+  elif [ ! -f "$ROOT/apps/web/node_modules/vite/package.json" ]; then need "web: packages not installed (ERR_MODULE_NOT_FOUND)" "scripts/dev/setup.sh  (or npm --prefix apps/web ci)"
+  elif [ "$(node -e 'const [a,b]=process.versions.node.split(".").map(Number); console.log((a===20&&b>=19)||(a===22&&b>=12)||a>=23?1:0)')" != 1 ]; then
+    need "web: node $(node -p 'process.versions.node') too old for Vite 8" "brew install node@22"; fi ;;
+esac
+case " $want " in *" hapi "*)
+  [ -n "$HAPI_JAVA" ] || need "hapi: no Java 11/17/21 runtime" "scripts/dev/setup.sh  (installs a private Java 17) or brew install openjdk@17" ;;
+esac
+[ $pre -eq 0 ] || { echo "Fix the BLOCKED items above, then rerun scripts/dev/up.sh"; exit 2; }
+
 running() { [ -f "$RUN_DIR/$1.pid" ] && kill -0 "$(cat "$RUN_DIR/$1.pid")" 2>/dev/null; }
 
 start() {

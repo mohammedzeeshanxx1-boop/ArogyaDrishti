@@ -107,6 +107,10 @@ def generate(_: argparse.Namespace) -> None:
     proc = subprocess.run(cmd, capture_output=True, text=True, cwd=CACHE)
     (OUT).mkdir(parents=True, exist_ok=True)
     (OUT / "synthea-run.log").write_text(proc.stdout + proc.stderr)
+    # Synthea output is reproducible for a fixed Java major version, NOT across versions
+    # (observed: Java 21 -> 18 patients, Java 17 -> 17 patients from the same seed). Record it.
+    jv = subprocess.run([cmd[0], "-version"], capture_output=True, text=True)
+    (OUT / "java-version.txt").write_text((jv.stderr or jv.stdout).strip().splitlines()[0])
     if proc.returncode != 0:
         sys.exit(f"[synthea] Synthea exited with {proc.returncode}; see output/synthea-run.log")
     n = len(patient_bundle_files())
@@ -222,6 +226,8 @@ def select(_: argparse.Namespace) -> None:
         "synthea": LOCK["synthea"],
         "run": LOCK["run"],
         "commandArgs": synthea_args(),
+        "java": (OUT / "java-version.txt").read_text() if (OUT / "java-version.txt").exists() else "unknown",
+        "reproducibility": "byte-identical for the same seed and the same Java major version; differs across Java versions",
         "selection": LOCK["selection"],
         "generatedPatients": len(summaries),
         "eligible": len(chosen),

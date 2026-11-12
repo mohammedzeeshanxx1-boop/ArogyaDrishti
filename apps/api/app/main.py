@@ -16,6 +16,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -34,7 +35,7 @@ from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
 from .patients import patient_profile, list_patients
-from . import detector, evaluation, scale2
+from . import detector, evaluation, monitoring, scale2
 from .risk import VITAL_LABEL, to_celsius
 from .replay import store as replay_store
 from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
@@ -112,10 +113,20 @@ def create_app(
         app.state.sim_client = httpx.AsyncClient(base_url=base, transport=sim_transport, timeout=60)
         app.state.simulator = Simulator(app.state.sim_client)
         app.state.windows = {}  # patientId -> {"since": UTC Z, "session": replay session id or None}
+        monitoring.init(settings.sqlite_path)
+        app.state.assessor = monitoring.Assessor(app.state.fhir, settings.sqlite_path)
+        async def _warm():
+            try:
+                await cached_patients(app)
+            except Exception:
+                pass   # HAPI may still be starting; the first request will load it
+        app.state.warmup = asyncio.create_task(_warm())
         app.state.replay = ReplayManager(app.state.fhir, settings.sqlite_path,
-                                         legacy_busy=lambda: app.state.simulator.state.running)
+                                         legacy_busy=lambda: app.state.simulator.state.running,
+                                         on_batch=app.state.assessor.request)
         yield
         await app.state.replay.shutdown()
+        await app.state.assessor.idle()
         await app.state.simulator.stop()
         await app.state.sim_client.aclose()
         await app.state.fhir.aclose()
@@ -156,6 +167,8 @@ def create_app(
         except ValueError:
             return fhir_error(400, "structure", "Body is not valid JSON")
         result = await ingest_observation(resource, fhir(request), settings.sqlite_path)
+        if result.http_status == 201 and str(result.body.get("subject", "")).startswith("Patient/"):
+            request.app.state.assessor.request(result.body["subject"].split("/", 1)[1])   # monitoring workflow
         headers = {"Location": result.body["location"]} if result.http_status == 201 else None
         return JSONResponse(result.body, status_code=result.http_status, headers=headers,
                             media_type=FHIR_JSON if result.body.get("resourceType") == "OperationOutcome" else None)
@@ -191,9 +204,18 @@ def create_app(
 
     # ------------------------------------------------------------ patients
     @app.get("/api/patients")
-    async def patients(request: Request) -> dict:
-        items = await list_patients(fhir(request))
-        return {"count": len(items), "synthetic": True, "patients": items}
+    async def patients(request: Request, refresh: bool = False) -> dict:
+        return await cached_patients(request.app, refresh)
+
+    async def cached_patients(app_: FastAPI, refresh: bool = False) -> dict:
+        # The cohort changes only when seed.sh runs; cache the 8x3 HAPI queries for 10 min (?refresh=true to force).
+        hit = getattr(app_.state, "patients_cache", None)
+        if hit and not refresh and (datetime.now(timezone.utc) - hit[0]).total_seconds() < 600:
+            return hit[1]
+        items = await list_patients(app_.state.fhir)
+        body = {"count": len(items), "synthetic": True, "patients": items}
+        app_.state.patients_cache = (datetime.now(timezone.utc), body)
+        return body
 
     @app.get("/api/patients/{pid}/profile")
     async def profile(pid: str, request: Request):
@@ -236,25 +258,24 @@ def create_app(
         request.app.state.windows[body.patientId] = {"since": _z(datetime.now(timezone.utc)), "session": None}
         return {"patientId": body.patientId, "windowStart": request.app.state.windows[body.patientId]["since"], "simulator": state}
 
-    @app.get("/api/demo/monitor/{pid}")
-    async def monitor(pid: str, request: Request, mode: str = Query("personalized", pattern="^(fixed|personalized)$")):
+    async def build_monitor(app_: FastAPI, pid: str, mode: str) -> dict:
         """Everything the dashboard shows for one patient, computed from observations stored in HAPI."""
-        if not FHIR_ID.match(pid):
-            return fhir_error(400, "invalid", "patient id must be a FHIR id")
-        view = request.app.state.windows.get(pid) or {"since": _z(datetime.now(timezone.utc) - timedelta(minutes=30)), "session": None}
+        view = app_.state.windows.get(pid) or {"since": _z(datetime.now(timezone.utc) - timedelta(minutes=monitoring.RECENT_MINUTES)), "session": None}
         window = view["since"]
         params = {
             "subject": f"Patient/{pid}",
-            "code": ",".join(f"{LOINC}|{c}" for c in VITALS),
             # A replay view shows only that session's Observations (measurement times may overlap other runs).
-            "_tag": f"{SESSION_TAG_SYSTEM}|{view['session']}" if view["session"] else f"{INGEST_TAG['system']}|{INGEST_TAG['code']}",
+            # The live view filters the ingestion tag and LOINC codes in Python (much faster on HAPI 5.7/H2).
+            **({"_tag": f"{SESSION_TAG_SYSTEM}|{view['session']}"} if view["session"] else {}),
             # Never show readings timestamped in the future (they cannot be real measurements;
             # the ingestion endpoint already rejects them, but HAPI may hold data written by other clients).
             "date": [f"ge{window}", f"le{_z(datetime.now(timezone.utc) + timedelta(minutes=5))}"],
             "_sort": "-date",   # newest first, so long sessions show their latest readings
             "_count": 200,
         }
-        stored = await fhir(request).search("Observation", params, limit=MONITOR_LIMIT)
+        stored = await app_.state.fhir.search("Observation", params, limit=MONITOR_LIMIT * (1 if view["session"] else 2))
+        if not view["session"]:
+            stored = [o for o in stored if monitoring.is_ingested(o)][:MONITOR_LIMIT]
         readings, vitals = [], {k: {"label": l, "unit": u, "series": [], "latest": None} for k, (l, u) in VITAL_LABEL.items()}
         for o in stored:
             code = next((c["code"] for c in o.get("code", {}).get("coding", []) if c.get("system") == LOINC and c.get("code") in VITALS), None)
@@ -291,9 +312,10 @@ def create_app(
                     "validation": "local strict validation" + ("; HAPI $validate (first of this vital in the session)" if rep["hapi_shape_validated"] else
                                                               "; HAPI $validate done once per vital per session"),
                 }
-        s2 = await scale2.status(fhir(request), pid)
-        sim = request.app.state.simulator.state.public()
-        rs = request.app.state.replay.get(view["session"]) if view["session"] else None
+        s2 = await scale2.cached_status(app_.state.fhir, pid)
+        risk = detector.evaluate(readings, mode=mode, scale2=s2["eligible"])
+        sim = app_.state.simulator.state.public()
+        rs = app_.state.replay.get(view["session"]) if view["session"] else None
         return {
             "replay": rs.public() if rs else None,
             "patientId": pid,
@@ -302,10 +324,105 @@ def create_app(
             "observationCount": len(readings),
             "truncated": len(stored) >= MONITOR_LIMIT,
             "vitals": vitals,
-            "risk": detector.evaluate(readings, mode=mode, scale2=s2["eligible"]),
+            "risk": risk,
+            "assessment": monitoring.summarize(readings, risk, datetime.now(timezone.utc)),
             "scale2": s2,
             "fhirProof": proof,
             "simulator": sim if sim["patientId"] == pid else None,
+        }
+
+    @app.get("/api/demo/monitor/{pid}")
+    async def monitor(pid: str, request: Request, mode: str = Query("personalized", pattern="^(fixed|personalized)$")):
+        if not FHIR_ID.match(pid):
+            return fhir_error(400, "invalid", "patient id must be a FHIR id")
+        return await build_monitor(request.app, pid, mode)
+
+    @app.websocket("/ws/monitor/{pid}")
+    async def monitor_ws(ws: WebSocket, pid: str, mode: str = "personalized", interval: float = 1.5):
+        """Pushes the same payload as GET /api/demo/monitor/{pid} every `interval` seconds."""
+        await ws.accept()
+        if not FHIR_ID.match(pid) or mode not in ("fixed", "personalized"):
+            await ws.send_json({"type": "error", "detail": "invalid patient id or mode"})
+            await ws.close()
+            return
+        interval = min(max(interval, 0.5), 30.0)
+        seq = 0
+        try:
+            while True:
+                try:
+                    data = await build_monitor(ws.app, pid, mode)
+                    seq += 1
+                    await ws.send_json({"type": "monitor", "seq": seq, "data": json.loads(json.dumps(data, default=str))})
+                except FhirUnavailable as exc:
+                    await ws.send_json({"type": "error", "detail": f"FHIR server unavailable: {exc}"})
+                await asyncio.sleep(interval)
+        except (WebSocketDisconnect, RuntimeError):
+            return
+
+    # ------------------------------------------------------------ clinical views
+    @app.get("/api/clinical/overview")
+    async def clinical_overview(request: Request) -> dict:
+        """Every discharged patient with current monitoring status, computed from recent HAPI data (no state change)."""
+        hit = getattr(request.app.state, "overview_cache", None)
+        now = datetime.now(timezone.utc)
+        if hit and (now - hit[0]).total_seconds() < 5:
+            return hit[1]
+        pts = (await cached_patients(request.app))["patients"]
+        sem = asyncio.Semaphore(4)
+
+        async def one(p):
+            async with sem:
+                try:
+                    a = await monitoring.assess(fhir(request), settings.sqlite_path, p["id"], record=False, now=now)
+                except FhirUnavailable as exc:
+                    a = {"assessable": False, "level": None, "monitoringStatus": "unavailable", "error": str(exc), "latest": {}}
+                return {**p, "monitoring": a}
+
+        body = {"generatedAt": now.isoformat(), "recentWindowMinutes": monitoring.RECENT_MINUTES,
+                "staleAfterMinutes": monitoring.STALE_MINUTES, "patients": list(await asyncio.gather(*(one(p) for p in pts)))}
+        request.app.state.overview_cache = (now, body)
+        return body
+
+    @app.get("/api/alerts")
+    async def alerts(request: Request, patient: str | None = None, limit: int = Query(50, ge=1, le=500)):
+        if patient is not None and not FHIR_ID.match(patient):
+            return fhir_error(400, "invalid", "patient must be a FHIR id")
+        return {"alerts": monitoring.alert_events(settings.sqlite_path, patient, limit),
+                "note": "Recorded when the assessed risk level changes. No acknowledgement workflow exists."}
+
+    @app.get("/api/monitoring/status")
+    async def monitoring_status(request: Request) -> dict:
+        """Which observation sources are delivering data. Never claims a physical device is connected."""
+        with replay_store.connect(settings.sqlite_path) as c:
+            last_ing = c.execute("SELECT received_at, observation_id FROM ingestion_events WHERE outcome = 'accepted' ORDER BY id DESC LIMIT 1").fetchone()
+            last_rep = c.execute("SELECT MAX(ingested_at) AS t FROM replay_events").fetchone()
+        times = [t for t in ((last_ing or {}) and last_ing["received_at"], last_rep["t"] if last_rep else None) if t]
+        last = max(times) if times else None
+        label = None
+        if last_ing and last_ing["observation_id"]:
+            cache = getattr(request.app.state, "source_label", {})
+            if last_ing["observation_id"] not in cache:
+                try:
+                    o = await fhir(request).read("Observation", last_ing["observation_id"])
+                    cache[last_ing["observation_id"]] = ((o or {}).get("device") or {}).get("display")
+                except FhirUnavailable:
+                    cache[last_ing["observation_id"]] = None
+                request.app.state.source_label = cache
+            label = cache.get(last_ing["observation_id"])
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() if last else None
+        sim = request.app.state.simulator.state
+        rep = request.app.state.replay.active()
+        return {
+            "status": "receiving" if age is not None and age <= 120 else ("idle" if last else "none"),
+            "lastIngestionAt": last,
+            "secondsSinceLastIngestion": round(age, 1) if age is not None else None,
+            "latestSourceLabel": label,
+            "simulatedSourcesRunning": [s for s in (
+                f"Simulated wearable (development) for Patient/{sim.patient_id}" if sim.running else None,
+                f"Replay (development) for Patient/{rep.patient_id}" if rep else None) if s],
+            "physicalDevicesConnected": 0,
+            "assessments": request.app.state.assessor.assessments,
+            "lastAssessmentError": request.app.state.assessor.last_error,
         }
 
     # ------------------------------------------------------------ SpO2 Scale 2 (FHIR Flag)
@@ -370,6 +487,72 @@ def create_app(
         (out / "evaluation-latest.json").write_text(json.dumps(report, indent=2, default=str))
         request.app.state.latest_report = report
         return JSONResponse(json.loads(json.dumps(report, default=str)))
+
+    @app.get("/api/evidence")
+    async def evidence(request: Request) -> dict:
+        """Judge Evidence Console: every status below is computed now from HAPI, SQLite and saved reports."""
+        client = fhir(request)
+        reports = Path(settings.sqlite_path).parent / "reports"
+        def load(name):
+            p = reports / name
+            return json.loads(p.read_text()) if p.exists() else None
+        evalr, acc = load("evaluation-latest.json"), load("acceptance-latest.json")
+        probe = await probe_fhir(settings.fhir_base_url, settings.fhir_timeout_seconds, fhir_transport)
+        hapi_ok = probe.get("status") == "ok" and probe.get("isR4")
+        ingested = await client.count("Observation", {"_tag": f"{INGEST_TAG['system']}|{INGEST_TAG['code']}"}) if hapi_ok else 0
+        pts = await list_patients(client) if hapi_ok else []
+        events = ingestion_events(settings.sqlite_path, limit=200)
+        accepted = [e for e in events if e["outcome"] == "accepted"]
+        with replay_store.connect(settings.sqlite_path) as c:
+            sessions = c.execute("SELECT COUNT(*), COALESCE(SUM(events_created + events_existing), 0) FROM replay_sessions WHERE state = 'completed'").fetchone()
+        bidmc_dir = Path(__file__).resolve().parents[3] / "services" / "bidmc" / "data"
+        bidmc_files = sorted(p.name for p in bidmc_dir.glob("*.csv")) if bidmc_dir.exists() else []
+        sc = {s["scenario"]: s for s in (evalr or {}).get("scenarios", [])}
+        art = sc.get("artifact", {}).get("modes", {})
+        det = sc.get("deterioration", {}).get("modes", {})
+
+        def item(rid, name, status, evidence, how):
+            return {"id": rid, "requirement": name, "status": status, "evidence": evidence, "verify": how}
+
+        reqs = [
+            item(1, "FHIR R4 Vital Signs ingestion and HAPI storage",
+                 "PASS" if hapi_ok and ingested and accepted else ("BLOCKED" if not hapi_ok else "FAIL"),
+                 [f"HAPI {probe.get('software')} FHIR {probe.get('fhirVersion')}", f"{ingested} ingested Observations stored in HAPI",
+                  f"{len(accepted)} recent accepted ingestions, HAPI $validate errors: {sum((e.get('hapiValidation') or {}).get('errors', 0) for e in accepted)}"],
+                 "GET /api/fhir/Observation/{id}; GET /api/inspector/ingestions"),
+            item(2, "Virtual wearable simulator and real BIDMC replay",
+                 "PASS" if bidmc_files and sessions[0] else "PARTIAL",
+                 [f"{sessions[0]} completed replay sessions, {sessions[1]} Observations confirmed by HAPI",
+                  f"BIDMC files: {len(bidmc_files)}" + ("" if bidmc_files else " (BLOCKED: no PhysioNet BIDMC CSVs in services/bidmc/data)")],
+                 "POST /api/replay/sessions; services/bidmc/data"),
+            item(3, "At least 5 Synthea discharge profiles with conditions and medications",
+                 "PASS" if len(pts) >= 5 and all(p["activeConditions"] and p["activeMedications"] for p in pts) else ("BLOCKED" if not hapi_ok else "FAIL"),
+                 [f"{len(pts)} Synthea patients in HAPI", ", ".join(f"{p['activeConditions']}c/{p['activeMedications']}m" for p in pts)],
+                 "GET /api/patients; GET /api/patients/{id}/profile"),
+            item(4, "NEWS2-style baseline, SpO2 Scale 2, personalized baselines",
+                 "PARTIAL",
+                 ["NEWS2-style score from 4 of 7 parameters (BP, oxygen, consciousness not measured)",
+                  "Band transcription from RCP 2017 NOT verified against the chart PDF (BLOCKED: PDF not available)",
+                  "Scale 2 only via attributed FHIR Flag; 2 personalization rules with a safety floor (unit-tested)"],
+                 "apps/api/tests/test_detector.py; GET/POST /api/patients/{id}/scale2"),
+            item(5, "Sensor artifact detection and false alert suppression",
+                 "PASS" if art and art["personalized"]["falseAlertEpisodes"] < art["fixed"]["falseAlertEpisodes"] else ("BLOCKED" if not art else "FAIL"),
+                 [f"artifact scenario false alert episodes: fixed {art['fixed']['falseAlertEpisodes']} vs personalized {art['personalized']['falseAlertEpisodes']}" if art else "no evaluation report yet"],
+                 "POST /api/evaluation/run"),
+            item(6, "Clinician dashboard with explainable Watch/Review/Urgent alerts",
+                 "PASS" if (acc or {}).get("checks", {}).get("levels_seen", {}).get("status") == "PASS" else "PARTIAL",
+                 ["live updates via WebSocket /ws/monitor/{id} (polling fallback)",
+                  f"levels observed in last acceptance run: {(acc or {}).get('checks', {}).get('levels_seen', {}).get('evidence', 'not run')}"],
+                 "scripts/acceptance.py"),
+            item(7, "Scenario replay and comparative report vs fixed thresholds",
+                 "PASS" if evalr else "BLOCKED",
+                 [f"report {evalr['generatedAt'][:19]} UTC, {len(sc)} scenarios, seeds {[s['seed'] for s in sc.values()]}" if evalr else "no report",
+                  f"deterioration lead before critical: fixed {det['fixed']['leadTimeBeforeCriticalMin']} min, personalized {det['personalized']['leadTimeBeforeCriticalMin']} min" if det else ""],
+                 "POST /api/evaluation/run; GET /api/evaluation/latest"),
+        ]
+        return {"generatedAt": _now(), "requirements": reqs, "evaluation": evalr, "acceptance": acc,
+                "dataProvenance": {"patients": "synthetic (Synthea v3.4.0)", "vitals": "simulated (seeded scenarios)",
+                                   "bidmc": f"{len(bidmc_files)} real recordings" if bidmc_files else "not available"}}
 
     @app.get("/api/evaluation/latest")
     async def evaluation_latest(request: Request):

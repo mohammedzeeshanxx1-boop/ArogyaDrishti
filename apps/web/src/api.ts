@@ -1,18 +1,44 @@
 export type ServiceState = "ok" | "unreachable" | "error" | "checking";
 export type RiskLevel = "NORMAL" | "WATCH" | "REVIEW" | "URGENT";
 export type VitalKey = "heart_rate" | "spo2" | "respiratory_rate" | "body_temperature";
+export type MonitoringStatus = "active" | "stale" | "no_recent_data" | "unavailable";
 
 export interface StatusResponse {
   checkedAt: string;
-  checkpoint: string;
   services: {
     api: { status: ServiceState; version?: string };
-    fhir: { status: ServiceState; url?: string; fhirVersion?: string; isR4?: boolean; software?: string; detail?: string };
-    eventStore: { status: ServiceState; schemaVersion?: number; detail?: string };
+    fhir: { status: ServiceState; fhirVersion?: string; isR4?: boolean; software?: string; detail?: string };
+    eventStore: { status: ServiceState };
   };
 }
 
-export interface PatientSummary {
+export interface MonitoringSourceStatus {
+  status: "receiving" | "idle" | "none";
+  lastIngestionAt: string | null;
+  secondsSinceLastIngestion: number | null;
+  latestSourceLabel: string | null;
+  simulatedSourcesRunning: string[];
+  physicalDevicesConnected: number;
+}
+
+export interface Baseline { median: number; mad: number; n: number; from: string; to: string }
+
+export interface PatientMonitoring {
+  assessable: boolean;
+  level: RiskLevel | null;
+  monitoringStatus: MonitoringStatus;
+  lastObservationAt: string | null;
+  trustedVitals: number;
+  requiredTrustedVitals: number;
+  recentWindowMinutes: number;
+  staleAfterMinutes: number;
+  sources?: string[];
+  latest: Partial<Record<VitalKey, { value: number; effective: string; observation: string; score: number; baseline: Baseline | null }>>;
+  topReason?: string | null;
+  spo2Scale?: number;
+}
+
+export interface OverviewPatient {
   id: string;
   name: string;
   gender?: string;
@@ -21,25 +47,24 @@ export interface PatientSummary {
   lastDischarge?: string;
   activeConditions: number;
   activeMedications: number;
+  monitoring: PatientMonitoring;
 }
+
+export interface Overview { generatedAt: string; recentWindowMinutes: number; staleAfterMinutes: number; patients: OverviewPatient[] }
 
 export interface PatientProfile {
-  patient: { id: string; name: string; gender?: string; birthDate?: string; age?: number; syntheaId?: string };
-  discharge: { encounter: string; type?: string; admitted?: string; discharged?: string; facility?: string; inpatientStays: number } | null;
+  patient: { id: string; name: string; gender?: string; birthDate?: string; age?: number };
+  discharge: { encounter: string; type?: string; admitted?: string; discharged?: string; facility?: string; reason?: string[]; inpatientStays: number } | null;
   activeConditions: { id: string; condition?: string; onset?: string }[];
-  activeMedications: { id: string; medication?: string; authoredOn?: string }[];
-  allergies: { id: string; substance?: string }[];
+  activeMedications: { id: string; medication?: string; authoredOn?: string; dosage?: string }[];
+  allergies: { id: string; substance?: string; criticality?: string }[];
 }
 
-export interface Point {
-  effective: string;
-  value: number;
-  observation: string;
-}
+export interface Point { effective: string; value: number; observation: string }
 
 export interface Alert {
   level: RiskLevel;
-  ruleType: "threshold" | "trend" | "multi-parameter";
+  ruleType: string;
   vital: VitalKey | null;
   vitalLabel: string;
   value: number;
@@ -48,87 +73,14 @@ export interface Alert {
   observation: string;
   effective: string;
   reason: string;
+  score?: number;
+  baseline?: Baseline;
 }
-
-export interface SimulatorState {
-  running: boolean;
-  runId: string | null;
-  patientId: string | null;
-  scenario: "stable" | "deterioration" | null;
-  scenarioLabel: string | null;
-  step: number;
-  totalSteps: number;
-  intervalSeconds: number;
-  startedAt: string | null;
-  finishedAt: string | null;
-  stopped: boolean;
-  accepted: number;
-  rejected: number;
-  lastError: string | null;
-  lastObservationId: string | null;
-}
-
-export interface FhirProof {
-  observation: string;
-  id: string;
-  versionId?: string;
-  lastUpdated?: string;
-  hapiUrl: string;
-  readBackMatches: boolean | null;
-  hapiValidationErrors: number | null;
-  replay?: { sessionId: string; seq: number; batch: number; persistStatus: string; measuredAt: string; ingestedAt: string; validation: string } | null;
-}
-
-export type DetectorMode = "fixed" | "personalized";
 
 export interface Scale2Status {
   patientId: string; scale: number; eligible: boolean; rule: string;
   flag: { id: string; reference: string; author?: string; reason?: string; since?: string } | null;
   supportingConditions: string[];
-}
-
-export interface ModeMetrics {
-  alertEpisodes: number; alertsPerPatientDay: number | null; falseAlertEpisodes: number; artifactAlertEpisodes: number;
-  onsetToFirstWatchMin: number | null; leadTimeBeforeCriticalMin: number | null; detectedBeforeCritical: boolean | null;
-  explainabilityPct: number | null; peakLevel: RiskLevel; suppressedReadings: number;
-}
-
-export interface EvaluationReport {
-  generatedAt: string; patientId: string; durationMinutes: number; intervalSeconds: number; spo2Scale: number; dataSource: string; detectorLabel: string;
-  scenarios: { scenario: string; scenarioName: string; sessionId: string; seed: number; observations: number;
-    modes: Record<DetectorMode, ModeMetrics>;
-    fhirCompliance: { events: number; confirmedByHapi: number; storedInHapi: number; confirmedPct: number; sampleErrors: number } }[];
-}
-
-export type ReplayState = "created" | "running" | "paused" | "stopped" | "completed" | "error";
-export type ReplaySpeed = "1x" | "5x" | "10x" | "batch";
-
-export interface ReplaySession {
-  sessionId: string;
-  patientId: string;
-  source: string;
-  description: string;
-  scenario: string | null;
-  scenarioName: string | null;
-  seed: number | null;
-  durationMinutes: number | null;
-  intervalSeconds: number | null;
-  speed: ReplaySpeed;
-  state: ReplayState;
-  anchor: string;
-  endsAt: string;
-  simulatedNow: string;
-  eventsTotal: number;
-  cursor: number;
-  persisted: number;
-  created: number;
-  existing: number;
-  progress: number;
-  batches: number;
-  failedBatches: number;
-  lastError: string | null;
-  fingerprint: string;
-  resetFrom: string | null;
 }
 
 export interface Monitor {
@@ -138,17 +90,30 @@ export interface Monitor {
   observationCount: number;
   vitals: Record<VitalKey, { label: string; unit: string; series: Point[]; latest: Point | null }>;
   risk: {
-    level: RiskLevel; alerts: Alert[]; readingsConsidered: number; label: string; summary: string; mode?: DetectorMode;
-    suppressed?: { vital: string; value: number; observation: string; effective: string; reason: string }[];
-    suppressedCount?: number;
-    news2?: { total: number; level: RiskLevel; measuredParameters: number; of: number; partial: boolean; spo2Scale: number; notAvailable: string[];
-      parameters: Record<string, { score: number; value: number; observation: string; bands: string; baseline: { median: number; mad: number; n: number } | null }> };
+    level: RiskLevel; alerts: Alert[]; readingsConsidered: number; label: string; summary: string;
+    suppressed: { vital: string; value: number; observation: string; effective: string; reason: string }[];
+    suppressedCount: number;
+    news2: { total: number; level: RiskLevel; measuredParameters: number; of: number; partial: boolean; spo2Scale: number; notAvailable: string[];
+      parameters: Partial<Record<VitalKey, { score: number; value: number; observation: string; effective: string; bands: string; baseline: Baseline | null }>> };
   };
+  assessment: PatientMonitoring;
   scale2?: Scale2Status;
-  fhirProof: FhirProof | null;
-  simulator: SimulatorState | null;
-  replay: ReplaySession | null;
-  truncated?: boolean;
+}
+
+export interface AlertEvent {
+  id: number;
+  patient_id: string;
+  created_at: string;
+  measured_at: string | null;
+  kind: "raised" | "escalated" | "de-escalated" | "resolved";
+  level: RiskLevel;
+  previous_level: RiskLevel | null;
+  vital: VitalKey | null;
+  value: number | null;
+  unit: string | null;
+  rule: string | null;
+  reason: string;
+  observation: string | null;
 }
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -161,30 +126,18 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-const post = (body: unknown): RequestInit => ({
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
+const post = (body: unknown): RequestInit => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const enc = encodeURIComponent;
 
 export const fetchStatus = () => getJson<StatusResponse>("/api/v1/status");
-export const fetchPatients = () => getJson<{ count: number; patients: PatientSummary[] }>("/api/patients");
-export const fetchProfile = (id: string) => getJson<PatientProfile>(`/api/patients/${encodeURIComponent(id)}/profile`);
-export const fetchMonitor = (id: string, mode: DetectorMode = "personalized") =>
-  getJson<Monitor>(`/api/demo/monitor/${encodeURIComponent(id)}?mode=${mode}`);
-export const setScale2 = (id: string, prescribedBy: string, reason: string) =>
-  getJson<Scale2Status>(`/api/patients/${encodeURIComponent(id)}/scale2`, post({ prescribedBy, reason }));
-export const clearScale2 = (id: string) => getJson<Scale2Status>(`/api/patients/${encodeURIComponent(id)}/scale2`, { method: "DELETE" });
-export const runEvaluation = (patientId: string, durationMinutes = 240) =>
-  getJson<EvaluationReport>("/api/evaluation/run", post({ patientId, durationMinutes }));
-export const fetchLatestEvaluation = () => getJson<EvaluationReport>("/api/evaluation/latest");
-export const fetchObservation = (id: string) => getJson<Record<string, any>>(`/api/fhir/Observation/${encodeURIComponent(id)}`);
-export const startScenario = (patientId: string, scenario: "stable" | "deterioration") =>
-  getJson<SimulatorState>("/api/demo/simulator/start", post({ patientId, scenario }));
-export const stopScenario = () => getJson<SimulatorState>("/api/demo/simulator/stop", post({}));
-export const resetDemo = (patientId: string) => getJson<{ windowStart: string }>("/api/demo/reset", post({ patientId }));
-
-export const createReplay = (body: { patientId: string; scenario: string; speed: ReplaySpeed; durationMinutes: number; intervalSeconds?: number }) =>
-  getJson<ReplaySession>("/api/replay/sessions", post(body));
-export const replayAction = (sessionId: string, action: "start" | "pause" | "resume" | "stop" | "reset") =>
-  getJson<ReplaySession>(`/api/replay/sessions/${encodeURIComponent(sessionId)}/${action}`, post({}));
+export const fetchMonitoringStatus = () => getJson<MonitoringSourceStatus>("/api/monitoring/status");
+export const fetchOverview = () => getJson<Overview>("/api/clinical/overview");
+export const fetchProfile = (pid: string) => getJson<PatientProfile>(`/api/patients/${enc(pid)}/profile`);
+export const fetchMonitor = (pid: string) => getJson<Monitor>(`/api/demo/monitor/${enc(pid)}`);
+export const fetchAlerts = (pid?: string, limit = 50) =>
+  getJson<{ alerts: AlertEvent[] }>(`/api/alerts?limit=${limit}${pid ? `&patient=${enc(pid)}` : ""}`);
+export const setScale2 = (pid: string, prescribedBy: string, reason: string) =>
+  getJson<Scale2Status>(`/api/patients/${enc(pid)}/scale2`, post({ prescribedBy, reason }));
+export const clearScale2 = (pid: string) => getJson<Scale2Status>(`/api/patients/${enc(pid)}/scale2`, { method: "DELETE" });
+export const monitorSocketUrl = (pid: string) =>
+  `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws/monitor/${enc(pid)}?mode=personalized`;

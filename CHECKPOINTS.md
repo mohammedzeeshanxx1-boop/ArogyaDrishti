@@ -31,6 +31,98 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## Clinician-facing base prototype (2026-11-12, branch feature/clinical-dashboard)
+
+Checkpoint before changes: branch `checkpoint/pre-clinical-ui` (= main `b592bd7`).
+
+UI: hackathon controls removed from the dashboard (judge controls, demo and replay buttons, evaluation tables, Evidence Console, seeds and fingerprints, "Round 1 MVP"). Their backend endpoints and scripts are kept as developer utilities (docs/DEVELOPMENT.md). New: patient overview (search, risk filter, monitoring status, latest vitals, last reading), patient detail (demographics, discharge, conditions, medications, trusted vitals with personal baselines and trends, risk assessment with reasons, thresholds, source Observations and data reliability, alert history, SpO₂ Scale 2 configuration), header status (backend, FHIR server, monitoring source, last update).
+
+Backend additions: `app/monitoring.py` (server-side assessment after every accepted ingestion and replay batch; alert events stored on level change; no fabricated NORMAL without data), `GET /api/clinical/overview`, `GET /api/alerts`, `GET /api/monitoring/status`, `scripts/dev/simulate.sh`. Scoring thresholds, the safety floor, artifact suppression and baselines are unchanged.
+
+Performance: the live queries now send only subject and date to HAPI and filter code and tag in Python (measured 0.16-0.32 s vs 0.7-2.9 s); overview 39 s → about 2 s; monitor 2.5 s → 0.85 s.
+
+Acceptance (`scripts/acceptance.py`, this Linux workspace, not macOS):
+
+| Check | Status |
+|---|---|
+| services up | PASS |
+| patients 8 | PASS |
+| live simulation | PASS |
+| levels seen | PASS |
+| alert events | PASS |
+| overview status | PASS |
+| no data not normal | PASS |
+| monitoring source status | PASS |
+| fhir readback | PASS |
+| explanations | PASS |
+| news2 scoring | PASS |
+| websocket updates | PASS |
+| scale2 | PASS |
+| personal baselines | PASS |
+| artifact suppression | PASS |
+| replay lab | PASS |
+| bidmc replay | BLOCKED |
+| evidence console | PASS |
+
+Tests: `scripts/check.sh`: 121 unit, 28 live HAPI, 28 repo, 5 web, type-check, build: ALL CHECKS PASSED. Browser (desktop 1440 px and mobile 390 px): 8 patient cards, no demo wording, no horizontal overflow, detail page "Live updates" via WebSocket, 0 console errors. The polling fallback is covered by a web test.
+
+Not verified here: macOS startup (this workspace cannot reach the user's Mac; the macOS setup path was verified earlier in a macOS-like simulation only). Limitations unchanged: BIDMC BLOCKED, NEWS2 bands unverified against the RCP PDF, simulated monitoring data, no alert acknowledgement workflow.
+
+---
+
+## Phase 7: end-to-end acceptance (2026-11-12)
+
+Command: `.venv/bin/python scripts/acceptance.py --with-tests` (run 2026-11-12T14:59:28 UTC on this Linux workspace at commit d0b780c; **not run on the macOS machine**, which this workspace cannot reach). Raw report: `docs/acceptance-latest.json`. Result: 14 PASS, 0 FAIL, 1 BLOCKED.
+
+| Check | Status | Evidence |
+|---|---|---|
+| services up | PASS | HAPI 200 FHIR 4.0.1; API 200; web proxy 200 |
+| patients 8 | PASS | 8 patients via API, 8 via web proxy; 8/8 profiles complete with conditions and medications |
+| live simulation | PASS | 80 readings accepted, 0 rejected; latest {'heart_rate': 134.0, 'spo2': 88.0, 'respiratory_rate': 31.0, 'body_temperature': 39.3} |
+| levels seen | PASS | NORMAL@3.0s → WATCH@8.9s → REVIEW@15.0s → URGENT@18.5s |
+| fhir readback | PASS | Observation/52936: HAPI 200, API 200, identical=True, 8310-5 = 39.3 Cel, profile bodytemp, ingest read-back match True, $validate errors 0 |
+| explanations | PASS | 5 alerts at URGENT; all have rule/value/unit/reason: True; 8/8 triggering Observations resolve in HAPI; e.g. "NEWS2-style partial aggregate 11 (from 4 of 7 parameters; a single parameter scores 3)." |
+| news2 scoring | PASS | NEWS2-style total 11 = sum of {heart_rate: 134.0→3, spo2: 88.0→3, respiratory_rate: 31.0→3, body_temperature: 39.3→2}; partial 4/7; band source not verified against the RCP PDF |
+| websocket updates | PASS | direct pushes [(1, 'URGENT', '2026-11-12T15:00:22.626080+00:00'), (2, 'URGENT', '2026-11-12T15:00:25.322663+00:00')]; via Vite proxy [(1, 'URGENT'), (2, 'URGENT')] |
+| scale2 | PASS | SpO2 87.0%: Scale 1 score 3 → after FHIR Flag/53181 Scale 2 score 1 (total 10→8) → flag cleared, Scale 1 |
+| personal baselines | PASS | baselines from 484 stored readings: heart_rate median 74.0 MAD 1.0 (n=100), spo2 median 97.0 MAD 1.0 (n=100), respiratory_rate median 15.0 MAD 0.0 (n=100), body_temperature median 36.8 MAD 0.1 (n=100); level NORMAL. Rule-level behaviour (deviation, chronic tol |
+| artifact suppression | PASS | 11 readings suppressed in the latest window (isolated spike of 15 that reverted; isolated spike of 21 that reverted; isolated spike of 57 that reverted; isolated spike of 60 that reverted; physiologically implausible; probe-off); personalized level NORMAL |
+| replay lab | PASS | 2 independent runs, identical metrics: True. Lead before critical (deterioration): fixed 43.0 / personalized 43.0 min; artifact alerts/patient-day fixed 36.0 vs personalized 0.0; false episodes artifact 6→0, deterioration+artifact 2→0 |
+| bidmc replay | BLOCKED | no genuine PhysioNet BIDMC files in services/bidmc/data; no substitute data used |
+| unit integration frontend | PASS | 116 passed, 28 deselected in 7.09s; 28 passed, 116 deselected in 99.06s (0:01:39); 28 passed in 0.05s; Test Files  1 passed (1); Tests  4 passed (4); ALL CHECKS PASSED |
+| evidence console | PASS | /api/evidence 200: R1 PASS, R2 PARTIAL, R3 PASS, R4 PARTIAL, R5 PASS, R6 PASS, R7 PASS; shows this run: True |
+
+Added to pass Phase 7 (minimal changes):
+- WebSocket live updates: `/ws/monitor/{id}` pushes the monitor payload; the dashboard uses it, falls back to polling, and shows which is active.
+- Judge Evidence Console: `GET /api/evidence` computes each requirement's status now (HAPI, SQLite, saved evaluation and acceptance reports, BIDMC folder) and the dashboard displays it.
+- `scripts/acceptance.py`: reproducible end-to-end test writing the report the console shows.
+
+Defects found and fixed:
+- Acceptance report written to a different folder from the one the API reads.
+- First WebSocket push arrived after the 4 s polling fallback; the patient list took 7.8 s (24 HAPI queries). Patient list now cached 60 s (0.001 s), Scale 2 status cached 15 s, watchdog 10 s.
+
+Limitations: the monitor takes about 2.5 s per refresh because HAPI holds about 50k test Observations (H2); BIDMC BLOCKED; NEWS2 bands not verified against the RCP chart; all evaluation data simulated.
+
+---
+
+## macOS localhost fix (2026-11-12)
+
+Reported on macOS (Apple Silicon): setup and all three services failed. Root causes, verified against package metadata:
+- `fastapi==0.162.5` is a real release but needs Python ≥ 3.10 (so do uvicorn 0.54 and pytest 9.2). Under macOS Python 3.9, pip reports "No matching distribution", and the code's `int | None` annotations fail too. Pins kept; setup now finds Python ≥ 3.10 (3.13/3.12/3.11/3.10, Homebrew paths, or uv), moves an incompatible `.venv` aside and recreates it.
+- No Java 11 runtime exists for Apple Silicon on PyPI (`jdk4py` 11.x has no macOS arm64 wheel). The original HAPI crash was the class scanner, not the Java version: the patched jar runs on **Java 11, 17 and 21** (verified). Setup uses an installed 11/17/21 or installs `jdk4py==17.0.9.2` (wheels for macOS arm64/x86_64 and Linux x86_64).
+- Patching no longer needs `javac`: a pure-Python class-file tool strips the type-use annotations (Jandex re-scan: 0 failures of 92,335 classes).
+- Web `ERR_MODULE_NOT_FOUND`: `npm ci` never ran because setup aborted at the pip step. Setup now runs every step and reports PASS/FAIL; it checks Node (Vite 8 needs ^20.19 or ≥ 22.12, Vitest ≥ 22.12). `up.sh` checks prerequisites first and prints the fix.
+- `run.sh` uses `shasum -a 256` where `sha256sum` is missing (macOS).
+
+Verification in a fresh clone with a macOS-like PATH (`python3` = 3.9, existing 3.9 `.venv`, no `java`, alternate ports):
+- `setup.sh`: 3.9 venv moved aside, Python 3.13 venv (fastapi 0.162.5, pydantic 2.14.3), web packages (vite 8.3.8), private Java 17: SETUP OK.
+- `up.sh` → `seed.sh` (80 s) → `health.sh`: 8 PASS, 0 blocked.
+- `check.sh`: 114 unit, 28 live HAPI, 28 repo, 4 web, type-check, build: ALL CHECKS PASSED.
+
+Not exercised: the "no Python ≥ 3.10 anywhere" message (this machine has 3.13 under `/usr/local/bin`), and a real Mac. Finding: Synthea output depends on the Java major version (same seed: Java 21 → 18 patients, Java 17 → 17 patients, a different 8 selected). The manifest now records the Java version; reproducibility holds for a fixed Java version only.
+
+---
+
 ## P0 features: NEWS2-style scoring, Scale 2, Sensor Trust Engine, baselines, evaluation (2026-11-12)
 
 | Feature | Status | Evidence |

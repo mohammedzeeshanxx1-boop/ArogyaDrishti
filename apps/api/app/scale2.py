@@ -9,6 +9,7 @@ only shown as supporting context.
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timezone
 
 from .fhir import FhirClient
@@ -26,6 +27,33 @@ async def active_flag(fhir: FhirClient, pid: str) -> dict | None:
     flags = await fhir.search("Flag", {"patient": f"Patient/{pid}", "_count": 50})
     active = [f for f in flags if _is_scale2(f) and f.get("status") == "active"]
     return max(active, key=lambda f: f.get("meta", {}).get("lastUpdated", "")) if active else None
+
+
+_cache: dict[str, tuple[float, dict]] = {}
+CACHE_SECONDS = 15.0
+
+
+async def cached_status(fhir: FhirClient, pid: str) -> dict:
+    """status() cached briefly for the live monitor (set_flag/clear_flag invalidate it)."""
+    hit = _cache.get(pid)
+    if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
+        return hit[1]
+    s = await status(fhir, pid)
+    _cache[pid] = (time.monotonic(), s)
+    return s
+
+
+_elig: dict[str, tuple[float, bool]] = {}
+
+
+async def cached_eligible(fhir: FhirClient, pid: str) -> bool:
+    """Only the Flag lookup (fast); used where supporting conditions are not displayed."""
+    hit = _elig.get(pid)
+    if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
+        return hit[1]
+    ok = await active_flag(fhir, pid) is not None
+    _elig[pid] = (time.monotonic(), ok)
+    return ok
 
 
 async def status(fhir: FhirClient, pid: str) -> dict:
@@ -47,6 +75,8 @@ async def status(fhir: FhirClient, pid: str) -> dict:
 
 
 async def set_flag(fhir: FhirClient, pid: str, prescribed_by: str, reason: str) -> dict:
+    _cache.pop(pid, None)
+    _elig.pop(pid, None)
     if await active_flag(fhir, pid):
         return await status(fhir, pid)
     flag = {
@@ -62,10 +92,14 @@ async def set_flag(fhir: FhirClient, pid: str, prescribed_by: str, reason: str) 
     r = await fhir.request("POST", "Flag", json=flag)
     if r.status != 201:
         raise ValueError(f"HAPI did not store the Flag (HTTP {r.status})")
+    _cache.pop(pid, None)
+    _elig.pop(pid, None)
     return await status(fhir, pid)
 
 
 async def clear_flag(fhir: FhirClient, pid: str) -> dict:
+    _cache.pop(pid, None)
+    _elig.pop(pid, None)
     flag = await active_flag(fhir, pid)
     if flag:
         flag = {**flag, "status": "inactive"}
@@ -73,4 +107,6 @@ async def clear_flag(fhir: FhirClient, pid: str) -> dict:
         r = await fhir.request("PUT", f"Flag/{flag['id']}", json=flag)
         if r.status not in (200, 201):
             raise ValueError(f"HAPI did not update the Flag (HTTP {r.status})")
+    _cache.pop(pid, None)
+    _elig.pop(pid, None)
     return await status(fhir, pid)
