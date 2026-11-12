@@ -246,3 +246,14 @@ export const fetchLabRun = (runId: string) => getJson<LabRun>(`/api/early-detect
 export const fetchLabPrepared = (patientId: string) =>
   getJson<Partial<Record<LabScenario, { runId: string; state: string; progress: number }>>>(`/api/early-detection/prepared?patientId=${enc(patientId)}`);
 export const fetchPatientList = () => getJson<{ count: number; patients: { id: string; name: string; source?: string }[] }>("/api/patients");
+
+// ---------------------------------------------------------------- Sensor Reliability Lab (doctor only)
+export interface SensorEpisode { index: number; minutes: number; false: boolean; artifactOnly: boolean; trigger: string[]; level?: RiskLevel }
+export interface SensorSide {
+  clinicalAlerts: number; falseClinicalAlerts: number; artifactsDetected: number | null; episodes: SensorEpisode[];
+  genuineDeterioration: { applicable: boolean; detected: boolean | null; minutes: number | null; level: RiskLevel | null };
+  alarmReadings?: number; peakLevel?: RiskLevel; readingsFlaggedNotLabelled?: number;
+}
+export interface SensorMetrics { definitions: string; labelledArtifactReadings: number; scenarioHasDeterioration: boolean; fixed: SensorSide; engine: SensorSide; falseAlertsAvoided: number }
+export interface SensorLabRun { ready: boolean; session: LabRun["session"]; analysis?: LabAnalysis; metrics?: SensorMetrics; scenario?: string }
+export const fetchSensorLabRun = (runId: string) => getJson<SensorLabRun>(`/api/sensor-lab/runs/${enc(runId)}`);

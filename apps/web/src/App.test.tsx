@@ -268,3 +268,44 @@ describe("Early Detection Lab", () => {
     expect(screen.getByTestId("lab-disclaimer")).toHaveTextContent("Not for medical diagnosis");
   });
 });
+
+describe("Sensor Reliability Lab", () => {
+  it("shows the comparator alert, the sensor-quality warning and measured results on identical readings", async () => {
+    window.location.hash = "#/doctor/sensor-lab";
+    const mk = (t: string, spo2: number, hr: number, alarm: boolean, flagged: boolean) => ({
+      t, readings: { spo2, heart_rate: hr }, latest: { spo2, heart_rate: hr, respiratory_rate: 15, body_temperature: 36.8 },
+      comparator: { alarm, breaches: alarm ? [{ vital: "spo2", value: spo2, text: `SpO₂ ${spo2} % below 90` }] : [] },
+      engine: { level: "NORMAL", news2: 0, measured: 4, alerts: [], trend: false,
+        suppressedNow: flagged ? [{ vital: "spo2", value: spo2, reason: "probe-off: zero reading (HR and SpO2 both 0)" }] : [] },
+      spo2Baseline: 97,
+    });
+    const analysis = {
+      comparator: { name: "c", description: "d", limits: {} }, engine: { name: "e", description: "d" },
+      start: "2026-11-12T10:00:00Z", end: "2026-11-12T10:02:00Z",
+      steps: [mk("2026-11-12T10:00:00Z", 97, 74, false, false), mk("2026-11-12T10:01:00Z", 0, 0, true, true), mk("2026-11-12T10:02:00Z", 97, 74, false, false)],
+      firstWarning: null, firstTrendWarning: null, firstComparatorAlert: null, advantageMinutes: null, comparatorAlarmSteps: 1, engineAlertSteps: 0,
+      artifacts: { suppressed: [{ vital: "spo2", value: 0, reason: "probe-off", effective: "2026-11-12T10:01:00Z" }], comparatorAlarmsFromArtifacts: [], engineAlertsDuringArtifacts: 0 },
+    };
+    const side = (alerts: number, falses: number, art: number | null) => ({ clinicalAlerts: alerts, falseClinicalAlerts: falses, artifactsDetected: art, episodes: alerts ? [{ index: 1, minutes: 1, false: true, artifactOnly: true, trigger: ["x"] }] : [],
+      genuineDeterioration: { applicable: false, detected: null, minutes: null, level: null }, peakLevel: "NORMAL", readingsFlaggedNotLabelled: 0 });
+    const metrics = { definitions: "defs", labelledArtifactReadings: 2, scenarioHasDeterioration: false, fixed: side(1, 1, null), engine: side(0, 0, 2), falseAlertsAvoided: 1 };
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor },
+      "/api/patients": { count: 1, patients: [{ id: "p1", name: "Alex Lang", source: "synthea" }] },
+      "/api/early-detection/prepared": { artifact: { runId: "r9", state: "completed", progress: 1 } },
+      "/api/sensor-lab/runs/r9": { ready: true, session: { state: "completed", progress: 1, persisted: 1, eventsTotal: 1, scenarioName: "x", lastError: null }, analysis, metrics } }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("sl-patient")).toHaveValue("p1"));
+    fireEvent.click(screen.getByTestId("sl-run"));
+    await waitFor(() => expect(screen.getByTestId("sl-fixed-status")).toHaveTextContent("CLINICAL ALERT"), { timeout: 3000 });
+    expect(screen.getByTestId("sl-sensor-warning")).toHaveTextContent("Possible sensor disconnection detected. Oxygen readings may be unreliable. Please check the wearable device.");
+    expect(screen.getByTestId("sl-engine-status")).toHaveTextContent("No clinical alert");
+    expect(screen.getAllByTestId("sl-spo2").map((e) => e.textContent)).toEqual(["0%", "0%"]);
+    fireEvent.click(screen.getByTestId("sl-skip"));
+    await waitFor(() => expect(screen.getByTestId("sl-results")).toBeInTheDocument());
+    const rows = screen.getAllByTestId("sl-row").map((r) => r.textContent);
+    expect(rows[1]).toBe("False clinical alerts10");
+    expect(rows[2]).toContain("Not available");
+    expect(rows[3]).toContain("Not applicable");
+    expect(screen.getByTestId("sl-avoided")).toHaveTextContent("1 false clinical alert avoided");
+  });
+});

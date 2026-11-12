@@ -31,6 +31,17 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## Sensor Reliability Lab (2026-11-13, branch localhost-dev)
+
+- `app/sensor_lab.py` + `GET /api/sensor-lab/runs/{id}` (doctor only): for a run started with the existing `POST /api/early-detection/runs` (scenarios `artifact` = Sensor Fault, `deterioration` = Genuine Deterioration), runs the unchanged `early_detection.analyse` on the stored readings, then reads the scenario's ground-truth labels (after detection; evaluation only) and computes, identically for both sides: alert episodes, false clinical alerts (outside the deterioration window or triggered only by labelled faulty readings), labelled faulty readings detected, genuine deterioration detected.
+- Doctor Portal page `#/doctor/sensor-lab` (new nav item; no other page changed): scenario selector, "Run False Alert Comparison", live cards on identical readings, SpO₂/HR charts (green reliable, red fixed-threshold alert, yellow sensor-quality warning, red line AROGYA clinical alert), results table; sensor messages chosen from the engine's actual classification reason.
+
+Measured on live HAPI: Sensor Fault: fixed 5 clinical alerts (5 false), AROGYA 0 (0 false), 11 of 11 labelled faulty readings detected, 5 false clinical alerts avoided. Genuine Deterioration: both detect it (AROGYA T+60 WATCH → peak URGENT, 4 alert episodes; fixed T+108), 0 false alerts, nothing suppressed.
+
+Tests: 144 backend unit (4 new), 13 web (1 new), type-check, build; browser run of both scenarios (identical readings at every sample, no console errors, no overflow at 390 px). Not verified on macOS.
+
+---
+
 ## Early Detection Lab and alert presentation (2026-11-13, branch localhost-dev)
 
 - `app/early_detection.py` + `POST/GET /api/early-detection/runs`, `GET /api/early-detection/prepared` (doctor only): replays the existing seeded `deterioration` or `artifact` scenario into HAPI (batch, session-tagged, ending 4 h before now so it never enters the live 60-minute window; no live assessment or alert events), reads the stored readings back and walks them causally. At each step: the existing personalized engine (`detector.evaluate`, unchanged) and a labelled fixed single-reading comparator (SpO₂ < 90 %, HR < 50 / > 120, RR < 8 / > 30, T > 39.0 °C; no baseline, trend or artifact filtering).

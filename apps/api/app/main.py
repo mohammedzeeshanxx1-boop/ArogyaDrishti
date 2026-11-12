@@ -36,7 +36,7 @@ from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
 from .patients import PORTAL_ID_SYSTEM, _is_portal, _is_synthea, _name, list_patients, patient_profile, patient_summary
-from . import auth, datamgmt, detector, early_detection, evaluation, monitoring, notifications, scale2
+from . import auth, datamgmt, detector, early_detection, sensor_lab, evaluation, monitoring, notifications, scale2
 from .risk import VITAL_LABEL, to_celsius
 from .replay import store as replay_store
 from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
@@ -811,6 +811,26 @@ def create_app(
             eligible = await scale2.cached_eligible(fhir(request), s.patient_id)
             cache[sid] = await asyncio.to_thread(early_detection.analyse, readings, eligible)
         return {"ready": True, "session": pub, "analysis": cache[sid]}
+
+    # ------------------------------------------------------------ Sensor Reliability Lab (doctor only)
+    @app.get("/api/sensor-lab/runs/{sid}")
+    async def sensor_lab_get(sid: str, request: Request):
+        """False-alert comparison for a replay run started with POST /api/early-detection/runs.
+        Detection runs first on the stored readings; the scenario labels are read afterwards (evaluation only)."""
+        s = request.app.state.replay.get(sid)
+        if s is None:
+            return fhir_error(404, "not-found", f"run {sid} not found")
+        pub = s.public()
+        if pub["state"] != "completed":
+            return {"ready": False, "session": pub}
+        cache = request.app.state.__dict__.setdefault("sensor_lab_cache", {})
+        if sid not in cache:
+            readings, _ = await evaluation.session_readings(fhir(request), sid)
+            eligible = await scale2.cached_eligible(fhir(request), s.patient_id)
+            analysis = await asyncio.to_thread(early_detection.analyse, readings, eligible)
+            truth = replay_store.ground_truth(settings.sqlite_path, sid)        # read only after detection has run
+            cache[sid] = {"analysis": analysis, "metrics": sensor_lab.metrics(analysis, truth), "scenario": s.params.get("scenario")}
+        return {"ready": True, "session": pub, **cache[sid]}
 
     @app.get("/api/monitoring/status")
     async def monitoring_status(request: Request) -> dict:

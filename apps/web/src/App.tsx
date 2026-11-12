@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchMe, fetchStatus, logout, setUnauthorizedHandler, type StatusResponse, type User } from "./api";
-import { IconBell, IconChart, IconDatabase, IconFile, IconFlask, IconGrid, IconPulse, IconUser, IconUsers, IconVideo } from "./components/icons";
+import { IconBell, IconChart, IconDatabase, IconFile, IconFlask, IconGrid, IconPulse, IconShield, IconUser, IconUsers, IconVideo } from "./components/icons";
 import { EarlyDetectionLab } from "./pages/lab";
+import { SensorReliabilityLab } from "./pages/sensorlab";
 import { NotificationBell, NotificationProvider } from "./notifications";
 import { DataManagement, VideoConsultation } from "./pages/data";
 import { Shell, type NavItem } from "./components/Shell";
@@ -16,6 +17,7 @@ const DOCTOR_NAV: NavItem[] = [
   { href: "#/doctor/patients", label: "Patients", icon: IconUsers, match: (h) => h.startsWith("#/doctor/patients") },
   { href: "#/doctor/alerts", label: "Alerts", icon: IconBell, match: (h) => h.startsWith("#/doctor/alerts") },
   { href: "#/doctor/lab", label: "Early Detection Lab", icon: IconFlask, match: (h) => h.startsWith("#/doctor/lab") },
+  { href: "#/doctor/sensor-lab", label: "Sensor Reliability Lab", icon: IconShield, match: (h) => h.startsWith("#/doctor/sensor-lab") },
   { href: "#/doctor/data", label: "Data Management", icon: IconDatabase, match: (h) => h.startsWith("#/doctor/data") },
   { href: "#/doctor/video", label: "Video Consultation", icon: IconVideo, match: (h) => h.startsWith("#/doctor/video") },
 ];
@@ -55,6 +57,7 @@ function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: str
     : hash.startsWith("#/doctor/patients") ? ["Patient directory", <PatientDirectory />]
       : hash.startsWith("#/doctor/alerts") ? ["Alerts", <AlertsPage />]
         : hash.startsWith("#/doctor/lab") ? ["Early Detection Lab", <EarlyDetectionLab />]
+        : hash.startsWith("#/doctor/sensor-lab") ? ["Sensor Reliability Lab", <SensorReliabilityLab />]
         : hash.startsWith("#/doctor/data") ? ["Data Management", <DataManagement />]
           : hash.startsWith("#/doctor/video") ? ["Video Consultation", <VideoConsultation role="doctor" />]
             : ["Dashboard", <DoctorDashboard />];
