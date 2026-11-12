@@ -64,6 +64,19 @@ Pipeline: Synthea patient (HAPI) → virtual wearable → `POST /api/fhir/Observ
 
 Unit tests added: scenarios deterministic and every generated reading valid FHIR; stable never leaves NORMAL; deterioration escalates monotonically NORMAL→…→URGENT and passes through WATCH and REVIEW; every alert has rule, reason and observation; risk depends on values only; simulator posts through the ingestion endpoint; unknown patient or scenario rejected.
 
+### Final pre-demo verification (2026-11-12, 14:45)
+
+| Step | Status | Evidence |
+|---|---|---|
+| Start HAPI, API, web with `scripts/dev/up.sh` | PASS | health 8 PASS, 0 blocked |
+| 8 Synthea profiles through the API | PASS | `/api/patients` count 8; all 8 profiles `complete` |
+| Simulator produces HR, SpO2, RR, temperature | PASS | 4 cards populated, each with a chart line |
+| Stable Recovery → NORMAL | PASS | NORMAL at every 3 s sample, 46 s |
+| Gradual Deterioration → escalation with explanations | PASS | WATCH 15 s, REVIEW 21 s, URGENT 27 s; 8 alert rows; final HR 134, SpO2 88, RR 31, temperature 39.3 |
+| New Observation persisted and read back | PASS | Observation/13531 (stable) and 13611 (deterioration), live HAPI read-back, 0 validation errors |
+| Dashboard selector, controls, charts, alerts | PASS | 8 patients selectable; Stop disabled when idle; 0 console errors |
+| Health checks and tests | PASS | `scripts/check.sh` `ALL CHECKS PASSED` (75 + 21 + 28 + 3 web, build) |
+
 ### Known limitations (honest)
 
 - Risk thresholds are simplified demonstration bands, not NEWS2, not personalised, not clinically validated.
