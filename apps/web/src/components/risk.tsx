@@ -29,6 +29,65 @@ export function plainReason(a: Alert): string {
   return `${name} ${fmtVal(a)} is outside the expected range${a.score ? ` (adds ${a.score} point${a.score === 1 ? "" : "s"})` : ""}.`;
 }
 
+// ---------------------------------------------------------------- NEWS2-style breakdown (presentation only)
+export const NEWS2_ORDER: VitalKey[] = ["spo2", "heart_rate", "respiratory_rate", "body_temperature"];
+export const NEWS2_NAMES: Record<VitalKey, string> = {
+  spo2: "SpO₂ (Oxygen Saturation)", heart_rate: "Heart Rate", respiratory_rate: "Respiratory Rate", body_temperature: "Body Temperature",
+};
+export const NEWS2_CLASSES: { range: string; level: RiskLevel }[] = [
+  { range: "0", level: "NORMAL" }, { range: "1–4", level: "WATCH" },
+  { range: "5–6, or any single parameter scoring 3", level: "REVIEW" }, { range: "7 or higher", level: "URGENT" },
+];
+const SHORT: Record<VitalKey, string> = { spo2: "SpO₂", heart_rate: "Heart Rate", respiratory_rate: "Respiratory Rate", body_temperature: "Body Temperature" };
+
+/** Parameters that contributed points to the current total, from the API's per-parameter scores. */
+export function news2Contributors(m: Monitor): string[] {
+  const p = m.risk.news2.parameters;
+  return NEWS2_ORDER.filter((k) => (p[k]?.score ?? 0) > 0).sort((a, b) => (p[b]!.score - p[a]!.score))
+    .map((k) => `${SHORT[k]} ${p[k]!.value.toFixed(VITAL_META[k].decimals)} ${VITAL_META[k].unit} (score ${p[k]!.score})`);
+}
+
+export function News2Breakdown({ monitor }: { monitor: Monitor }) {
+  const n = monitor.risk.news2;
+  const current = monitor.assessment.assessable ? monitor.risk.level : null;
+  return (
+    <div className="mt-4 min-w-0 rounded-xl border border-slate-200 p-4" data-testid="news2-breakdown">
+      <p className="text-sm font-semibold text-navy-900">NEWS2-Style Risk Assessment (Partial)</p>
+      <p className="mt-0.5 text-xs text-navy-500">
+        Uses up to 4 of the 7 standard NEWS2 parameters ({n.measuredParameters} available now); not a complete NEWS2 score.
+        Not measured: {n.notAvailable.join(", ")}.{n.spo2Scale === 2 ? " SpO₂ scored on Scale 2 (clinician-recorded target)." : ""}
+      </p>
+      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-navy-500">Monitored parameters</p>
+      <ul className="mt-1 divide-y divide-slate-100 text-sm">
+        {NEWS2_ORDER.map((k) => {
+          const p = n.parameters[k];
+          return (
+            <li key={k} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-1.5" data-testid={`news2-${k}`}>
+              <span className="min-w-0 text-navy-700">{NEWS2_NAMES[k]}</span>
+              {p ? (
+                <span className="font-medium tabular-nums text-navy-900">{p.value.toFixed(VITAL_META[k].decimals)} {VITAL_META[k].unit}
+                  <span className={`ml-2 rounded-full px-2 py-0.5 text-xs font-semibold ${p.score >= 3 ? "bg-red-100 text-red-800" : p.score > 0 ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-navy-700"}`}>score {p.score}</span></span>
+              ) : <span className="text-navy-500">Not available</span>}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 flex items-baseline justify-between border-t border-slate-200 pt-2 text-sm" data-testid="news2-total">
+        <span className="font-semibold text-navy-900">Total score</span>
+        <span className="font-semibold tabular-nums text-navy-900">{n.total} <span className="text-xs font-normal text-navy-500">from {n.measuredParameters} available parameter{n.measuredParameters === 1 ? "" : "s"}</span></span>
+      </p>
+      <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-navy-500">Risk classification</p>
+      <ul className="mt-1 grid gap-1 text-sm sm:grid-cols-2" data-testid="news2-classes">
+        {NEWS2_CLASSES.map((c) => (
+          <li key={c.level} className={`flex items-center gap-2 rounded-lg px-2 py-1 ${current === c.level ? "bg-slate-100 font-semibold ring-1 ring-slate-300" : ""}`} aria-current={current === c.level ? "true" : undefined}>
+            <span className="min-w-0 flex-1 text-navy-700">{c.range}</span><span aria-hidden>→</span><LevelBadge level={c.level} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function notAssessedText(m: Monitor): string {
   const a = m.assessment;
   return a.monitoringStatus === "no_recent_data"
@@ -73,7 +132,9 @@ export function RiskPanel({ monitor, waiting }: { monitor: Monitor | null; waiti
                 {reasons.map((x, i) => (
                   <li key={i} className="flex items-start gap-2 text-sm text-navy-900">
                     <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${x.level === "URGENT" ? "bg-red-600" : x.level === "REVIEW" ? "bg-orange-600" : "bg-amber-500"}`} aria-hidden />
-                    {plainReason(x)}
+                    {x.ruleType === "news2-aggregate" && news2Contributors(monitor).length
+                      ? `NEWS2-style score ${x.value} (partial). Contributing: ${news2Contributors(monitor).join("; ")}.`
+                      : plainReason(x)}
                   </li>
                 ))}
               </ul>
@@ -81,6 +142,7 @@ export function RiskPanel({ monitor, waiting }: { monitor: Monitor | null; waiti
           )}
         </div>
       )}
+      {a.assessable && <News2Breakdown monitor={monitor} />}
       <p className="mt-4 text-xs text-navy-500" data-testid="reliability">
         Based on {a.trustedVitals} of 4 vital signs with trusted recent readings · {r.suppressedCount} reading{r.suppressedCount === 1 ? "" : "s"} excluded as likely sensor artifacts ·{" "}
         {a.monitoringStatus === "stale" ? "data is stale" : a.monitoringStatus === "active" ? "data is current" : "no current data"}. Partial NEWS2-style scoring; decision support only, not clinically validated.

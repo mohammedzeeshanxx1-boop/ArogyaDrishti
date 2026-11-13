@@ -134,7 +134,13 @@ describe("Doctor Portal", () => {
     expect(screen.getByTestId("vital-respiratory_rate")).toHaveTextContent("No trusted reading in this period");
     expect(screen.getByTestId("risk-level")).toHaveTextContent("URGENT");
     expect(screen.getByTestId("risk-headline")).toHaveTextContent(/urgent clinical review/);
-    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("Combined early-warning score 11");
+    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("NEWS2-style score 11 (partial). Contributing: Heart Rate 134 bpm (score 3)");
+    // breakdown from the API's per-parameter scores; missing parameters are not invented
+    expect(screen.getByTestId("news2-heart_rate")).toHaveTextContent("Heart Rate134 bpmscore 3");
+    expect(screen.getByTestId("news2-spo2")).toHaveTextContent("SpO₂ (Oxygen Saturation)Not available");
+    expect(screen.getByTestId("news2-total")).toHaveTextContent("Total score11 from 4 available parameters");
+    expect(screen.getByTestId("news2-breakdown")).toHaveTextContent("Uses up to 4 of the 7 standard NEWS2 parameters");
+    expect(within(screen.getByTestId("news2-classes")).getByText("7 or higher").closest("li")).toHaveAttribute("aria-current", "true");
     expect((screen.getByTestId("technical-details") as HTMLDetailsElement).open).toBe(false);
     expect(screen.getByTestId("sim-start")).toBeInTheDocument();
     expect(screen.getByText(/Demo \/ Simulation/)).toBeInTheDocument();
