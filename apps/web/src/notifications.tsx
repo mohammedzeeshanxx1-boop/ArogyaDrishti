@@ -68,7 +68,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         try {
           if (cursor.current === null) {           // never connected: establish the cursor without replaying history
             const f = await fetchNotifications();
-            cursor.current = f.latestId; f.items.forEach((i) => seen.current.add(i.id)); setItems(f.items); setUnread(f.unread);
+            // Only establishes the polling cursor. Items are not marked as seen here: if the WebSocket's first
+            // message is slow (e.g. right after an API restart), it still delivers events newer than its own
+            // connection cursor, and those must still pop up. Older history is never sent as new events.
+            cursor.current = f.latestId; setItems(f.items); setUnread(f.unread);
             return;
           }
           const f = await fetchNotifications(cursor.current, 50);

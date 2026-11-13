@@ -14,6 +14,8 @@ Honesty rules:
 
 from __future__ import annotations
 
+import json
+
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
@@ -49,7 +51,8 @@ CREATE TABLE IF NOT EXISTS alert_events (
     rule TEXT,
     reason TEXT NOT NULL,
     observation TEXT,
-    mode TEXT NOT NULL
+    mode TEXT NOT NULL,
+    news2_json TEXT                    -- the engine's partial NEWS2-style breakdown at this event (for explanations)
 );
 CREATE INDEX IF NOT EXISTS ix_alert_patient ON alert_events(patient_id, id);
 """
@@ -58,6 +61,16 @@ CREATE INDEX IF NOT EXISTS ix_alert_patient ON alert_events(patient_id, id);
 def init(db_path: str) -> None:
     with connect(db_path) as c:
         c.executescript(SCHEMA)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(alert_events)")}
+        if "news2_json" not in cols:   # additive, nullable; older events simply have no stored breakdown
+            c.execute("ALTER TABLE alert_events ADD COLUMN news2_json TEXT")
+
+
+def news2_snapshot(risk: dict) -> str:
+    """The engine's own per-parameter readings and scores at this assessment (stored as-is, not recalculated)."""
+    n = risk.get("news2") or {}
+    return json.dumps({"total": n.get("total"), "measured": n.get("measuredParameters"), "of": n.get("of", 7), "spo2Scale": n.get("spo2Scale", 1),
+                       "parameters": {k: {"value": v.get("value"), "score": v.get("score")} for k, v in (n.get("parameters") or {}).items()}})
 
 
 def _z(dt: datetime) -> str:
@@ -153,6 +166,7 @@ def record_transition(db_path: str, pid: str, risk: dict, summary: dict, mode: s
             "rule": (top or {}).get("rule"),
             "reason": top["reason"] if top else f"All trusted vitals back within the {('personalized ' if mode == 'personalized' else '')}thresholds.",
             "observation": (top or {}).get("observation"), "mode": mode,
+            "news2_json": news2_snapshot(risk),
         }
         cols = list(ev)
         cur = c.execute(f"INSERT INTO alert_events ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})", [ev[k] for k in cols])

@@ -37,7 +37,7 @@ export function AlertList({ alerts, names, showPatient = false, compact = false,
               <p className="mt-0.5">Parameters: SpO₂ (Oxygen Saturation), Heart Rate, Respiratory Rate, Body Temperature (up to 4 of the 7 NEWS2 parameters).
                 {/a single parameter scores 3/.test(a.reason) ? " A single parameter scored 3." : ""}</p>
               <p className="mt-0.5">Classification: 0 → NORMAL · 1–4 → WATCH · 5–6 or any single parameter 3 → REVIEW · 7 or higher → URGENT</p>
-              <p className="mt-0.5 text-navy-500">Per-parameter readings and scores are not stored with this alert; the patient's Risk assessment shows the current breakdown.</p>
+              {!(a as { news2_json?: string | null }).news2_json && <p className="mt-0.5 text-navy-500">Per-parameter readings and scores were not stored with this earlier alert; the patient's Risk assessment shows the current breakdown.</p>}
             </div>
           ) : !compact && a.summary && a.reason && a.summary !== a.reason && <p className="mt-0.5 text-xs text-navy-500">Rule: {a.reason}{a.rule ? ` (${a.rule})` : ""}</p>}
           {!compact && (a.acknowledgements?.length || onAcknowledge) ? (

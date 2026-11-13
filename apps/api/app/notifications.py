@@ -10,6 +10,8 @@ Acknowledging or reading never changes or deletes an alert event.
 
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timezone
 
 from .db import connect
@@ -64,19 +66,67 @@ def baseline(db_path: str, username: str) -> int:
         return since
 
 
+NEWS2_ORDER = ["spo2", "heart_rate", "respiratory_rate", "body_temperature"]
+NEWS2_NAMES = {"spo2": "SpO₂", "heart_rate": "Heart Rate", "respiratory_rate": "Respiratory Rate", "body_temperature": "Body Temperature"}
+
+
+def _breakdown(e: dict) -> dict | None:
+    try:
+        b = json.loads(e.get("news2_json") or "null")
+    except (TypeError, ValueError):
+        return None
+    return b if isinstance(b, dict) and b.get("parameters") is not None and b.get("total") is not None else None
+
+
+def _classification(level: str, total: float, scores: list[int]) -> str | None:
+    """Which band of the existing classification the stored total falls in (None if the level came from another rule)."""
+    if level == "URGENT" and total >= 7:
+        return "7 or higher → URGENT"
+    if level == "REVIEW" and 5 <= total <= 6:
+        return "5–6 → REVIEW"
+    if level == "REVIEW" and 3 in scores:
+        return "a single parameter scoring 3 → REVIEW"
+    if level == "WATCH" and 1 <= total <= 4:
+        return "1–4 → WATCH"
+    if level == "NORMAL" and total == 0:
+        return "0 → NORMAL"
+    return None
+
+
 def summary(e: dict) -> str:
-    """Plain-language one-liner from the stored event fields (no re-assessment)."""
+    """Plain-language explanation from the stored event fields (no re-assessment)."""
     if e["kind"] == "resolved" or e["level"] == "NORMAL":
         head = f"Back to NORMAL from {e['previous_level']}" if e.get("previous_level") else "NORMAL"
     elif e.get("previous_level"):
         head = f"{KIND_TEXT[e['kind']]} from {e['previous_level']} to {e['level']}"
     else:
         head = f"Risk raised to {e['level']}"
+    b = _breakdown(e)
+    if b is not None:
+        params = b["parameters"]
+        parts = []
+        for k in sorted((k for k in NEWS2_ORDER if k in params), key=lambda k: (-(params[k].get("score") or 0), NEWS2_ORDER.index(k))):
+            label, unit, dec = VITAL_TEXT[k]
+            v = params[k].get("value")
+            parts.append(f"{NEWS2_NAMES[k]} {v:.{dec}f} {unit} (score {params[k].get('score')})" if v is not None else f"{NEWS2_NAMES[k]} (score {params[k].get('score')})")
+        missing = [NEWS2_NAMES[k] for k in NEWS2_ORDER if k not in params]
+        text = f"{head}. Partial NEWS2-style score {b['total']:g}"
+        text += f": {', '.join(parts)}" if parts else ""
+        text += f"; not available: {', '.join(missing)}" if missing else ""
+        text += "."
+        cls = _classification(e["level"], b["total"], [int(p.get("score") or 0) for p in params.values()])
+        if cls:
+            text += f" Classification: {cls}."
+        elif e["level"] != "NORMAL" and e.get("reason"):
+            text += f" {e['level']} from a personalized rule: {e['reason']}"
+        text += f" Partial assessment: {b.get('measured', len(params))} of {b.get('of', 7)} NEWS2 parameters."
+        return text
+    # Events recorded before breakdowns were stored: say so instead of guessing the parameters.
     if e.get("vital") in VITAL_TEXT and e.get("value") is not None:
         label, unit, dec = VITAL_TEXT[e["vital"]]
         detail = f"{label} {e['value']:.{dec}f} {unit}"
     elif e.get("value") is not None:
-        detail = f"combined early-warning score {e['value']:g} (partial, 4 of 7 measures)"
+        detail = f"partial NEWS2-style score {e['value']:g} (individual parameter scores were not recorded for this earlier alert)"
     else:
         detail = ""
     return f"{head}: {detail}." if detail else f"{head}."
