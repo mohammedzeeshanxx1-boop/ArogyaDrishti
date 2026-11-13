@@ -194,27 +194,41 @@ class ScriptedSocket {
 describe("Doctor notifications", () => {
   it("pops up only events newer than the connection cursor, once each, on any doctor page", async () => {
     window.location.hash = "#/doctor/alerts";
+    const { FakeAudioContext } = await import("./testAudio");
+    const { _resetForTests } = await import("./alertSound");
+    FakeAudioContext.instances = []; vi.stubGlobal("AudioContext", FakeAudioContext); localStorage.clear(); _resetForTests();
     vi.stubGlobal("WebSocket", ScriptedSocket);
     vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor }, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
     render(<App />);
     await waitFor(() => expect(ScriptedSocket.last).not.toBeNull());
     const ws = ScriptedSocket.last!;
+    fireEvent.pointerDown(document.body);                                     // user interaction unlocks audio
+    await waitFor(() => expect(FakeAudioContext.instances[0]?.state).toBe("running"));
+    const beeps = () => FakeAudioContext.instances[0].starts.length;
     // history at connect: shown in the bell, never as a pop-up
     ws.send({ type: "hello", cursor: 10, latestId: 10, unread: 0, items: [ev(10, "URGENT", { read: true })] });
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryAllByTestId("toast")).toHaveLength(0);
+    expect(beeps()).toBe(0);                                                  // history: no sound
     ws.send({ type: "events", cursor: 12, unread: 2, items: [ev(11, "REVIEW"), ev(12, "URGENT")] });
     await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(2));
+    expect(beeps()).toBe(3);                                                  // one URGENT pattern for the batch
     ws.send({ type: "events", cursor: 12, unread: 2, items: [ev(12, "URGENT")] });   // repeated delivery
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.getAllByTestId("toast")).toHaveLength(2);
+    expect(beeps()).toBe(3);                                                  // repeated delivery: no sound
+    fireEvent.click(screen.getByTestId("sound-toggle"));                      // mute
+    expect(screen.getByTestId("sound-toggle")).toHaveAttribute("aria-pressed", "false");
+    ws.send({ type: "events", cursor: 13, unread: 3, items: [ev(13, "WATCH")] });
+    await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(3));
+    expect(beeps()).toBe(3);                                                  // muted: pop-up still shown, no sound
     const urgent = screen.getAllByTestId("toast").find((t) => t.getAttribute("data-level") === "URGENT")!;
     expect(urgent).toHaveAttribute("role", "alert");
     expect(within(urgent).getByTestId("toast-patient")).toHaveTextContent("Ariane Kirlin");
-    expect(screen.getByTestId("bell-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("bell-count")).toHaveTextContent("3");
     fireEvent.click(within(urgent).getByLabelText("Dismiss notification"));
-    expect(screen.getAllByTestId("toast")).toHaveLength(1);
-    fireEvent.click(screen.getByTestId("toast-view"));
+    expect(screen.getAllByTestId("toast")).toHaveLength(2);
+    fireEvent.click(screen.getAllByTestId("toast-view")[0]);
     expect(window.location.hash).toBe("#/doctor/patients/p1");
   });
 });

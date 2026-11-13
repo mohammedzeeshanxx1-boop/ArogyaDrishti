@@ -37,3 +37,5 @@ export const IconExternal = base(<><path d="M14 4h6v6" /><path d="M20 4 11 13" /
 export const IconDownload = base(<><path d="M12 4v11" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>);
 export const IconUpload = base(<><path d="M12 20V9" /><path d="m7 14 5-5 5 5" /><path d="M5 4h14" /></>);
 export const IconPlus = base(<path d="M12 5v14M5 12h14" />);
+export const IconVolume = base(<><path d="M11 5 6 9H3v6h3l5 4Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" /></>);
+export const IconMute = base(<><path d="M11 5 6 9H3v6h3l5 4Z" /><path d="m16 9 5 6M21 9l-5 6" /></>);

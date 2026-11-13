@@ -3,7 +3,7 @@ import { fetchMe, fetchStatus, logout, setUnauthorizedHandler, type StatusRespon
 import { IconBell, IconChart, IconDatabase, IconFile, IconFlask, IconGrid, IconPulse, IconShield, IconUser, IconUsers, IconVideo } from "./components/icons";
 import { EarlyDetectionLab } from "./pages/lab";
 import { SensorReliabilityLab } from "./pages/sensorlab";
-import { NotificationBell, NotificationProvider } from "./notifications";
+import { NotificationBell, NotificationProvider, SoundToggle } from "./notifications";
 import { DataManagement, VideoConsultation } from "./pages/data";
 import { Shell, type NavItem } from "./components/Shell";
 import { displayName } from "./components/ui";
@@ -65,7 +65,7 @@ function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: str
   return (
     <NotificationProvider>
       <Shell portal="Doctor Portal" user={user} nav={DOCTOR_NAV} hash={hash} title={title as string} status={status} onSignOut={onSignOut}
-        subtitle="Personalized post-discharge patient monitoring" headerRight={<NotificationBell />}>{page}</Shell>
+        subtitle="Personalized post-discharge patient monitoring" headerRight={<><SoundToggle /><NotificationBell /></>}>{page}</Shell>
     </NotificationProvider>
   );
 }
