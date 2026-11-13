@@ -115,7 +115,7 @@ export default function App() {
     return <div className="grid min-h-screen place-items-center bg-surface text-sm text-navy-500" role="status">Loading…</div>;
   }
   if (user === null) {
-    return <Login notice={notice ?? (status === "down" ? "The backend is not reachable. Start it with scripts/dev/up.sh." : null)}
+    return <Login notice={notice ?? (status === "down" ? "The server is not reachable right now. Please try again shortly." : null)}
       onSignedIn={(u) => { setNotice(null); setUser(u); window.location.hash = u.role === "doctor" ? "#/doctor" : "#/me"; }} />;
   }
   return user.role === "doctor"
