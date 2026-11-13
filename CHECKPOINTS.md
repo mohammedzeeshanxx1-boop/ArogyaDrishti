@@ -31,6 +31,30 @@ Development is **localhost-first** (no Docker) since 2026-11-12; see "Localhost-
 
 ---
 
+## Sensor Reliability Lab (2026-11-13, branch localhost-dev)
+
+- `app/sensor_lab.py` + `GET /api/sensor-lab/runs/{id}` (doctor only): for a run started with the existing `POST /api/early-detection/runs` (scenarios `artifact` = Sensor Fault, `deterioration` = Genuine Deterioration), runs the unchanged `early_detection.analyse` on the stored readings, then reads the scenario's ground-truth labels (after detection; evaluation only) and computes, identically for both sides: alert episodes, false clinical alerts (outside the deterioration window or triggered only by labelled faulty readings), labelled faulty readings detected, genuine deterioration detected.
+- Doctor Portal page `#/doctor/sensor-lab` (new nav item; no other page changed): scenario selector, "Run False Alert Comparison", live cards on identical readings, SpO₂/HR charts (green reliable, red fixed-threshold alert, yellow sensor-quality warning, red line AROGYA clinical alert), results table; sensor messages chosen from the engine's actual classification reason.
+
+Measured on live HAPI: Sensor Fault: fixed 5 clinical alerts (5 false), AROGYA 0 (0 false), 11 of 11 labelled faulty readings detected, 5 false clinical alerts avoided. Genuine Deterioration: both detect it (AROGYA T+60 WATCH → peak URGENT, 4 alert episodes; fixed T+108), 0 false alerts, nothing suppressed.
+
+Tests: 144 backend unit (4 new), 13 web (1 new), type-check, build; browser run of both scenarios (identical readings at every sample, no console errors, no overflow at 390 px). Not verified on macOS.
+
+---
+
+## Early Detection Lab and alert presentation (2026-11-13, branch localhost-dev)
+
+- `app/early_detection.py` + `POST/GET /api/early-detection/runs`, `GET /api/early-detection/prepared` (doctor only): replays the existing seeded `deterioration` or `artifact` scenario into HAPI (batch, session-tagged, ending 4 h before now so it never enters the live 60-minute window; no live assessment or alert events), reads the stored readings back and walks them causally. At each step: the existing personalized engine (`detector.evaluate`, unchanged) and a labelled fixed single-reading comparator (SpO₂ < 90 %, HR < 50 / > 120, RR < 8 / > 30, T > 39.0 °C; no baseline, trend or artifact filtering).
+- Doctor Portal: Early Detection Lab page (`#/doctor/lab`, dashboard card): two comparison cards on identical readings, SpO₂ and heart-rate charts with fixed limit, personal baseline and both first-detection markers, result summary with the measured difference (or "Not detected"), false-alert demo with sensor-quality warnings.
+- Alerts: standard WATCH / REVIEW / URGENT wording (shown only for levels the engine produced), level-coloured cards, triggering reading; same wording in pop-ups.
+- Performance: the overview and patient-list rebuild are single-flight (polling requests no longer pile up on HAPI).
+
+Measured (seeded scenarios, also on live HAPI): deterioration: engine first warning T+60 min (WATCH, SpO₂ 95 % scores 1; personal-baseline trend at T+70 min), comparator first alarm T+108 min (heart rate 121) → 48 min earlier. Artifact scenario: comparator 10 alarms, all from faulty readings; engine 11 readings suppressed, 0 clinical alerts. Not a clinical study; depends on the scenario and comparator limits.
+
+Tests: 140 backend unit (4 new), 12 web (1 new), type-check, build; acceptance 17 PASS, 0 FAIL, 1 BLOCKED (BIDMC). Browser: both cards identical at every sampled step, markers shown, summary correct, false-alert demo shows comparator ALARM vs engine sensor-quality warning, second run starts in < 0.5 s, no console errors, no overflow at 390 px. Not verified on macOS.
+
+---
+
 ## AROGYA DRISHTI 2.0 Phases 2 + 3 (2026-11-13, branch localhost-dev)
 
 Checkpoint before changes: branch `checkpoint/pre-phase23` (= `359fd14`).

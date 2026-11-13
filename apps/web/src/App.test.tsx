@@ -134,7 +134,13 @@ describe("Doctor Portal", () => {
     expect(screen.getByTestId("vital-respiratory_rate")).toHaveTextContent("No trusted reading in this period");
     expect(screen.getByTestId("risk-level")).toHaveTextContent("URGENT");
     expect(screen.getByTestId("risk-headline")).toHaveTextContent(/urgent clinical review/);
-    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("Combined early-warning score 11");
+    expect(screen.getByTestId("risk-reasons")).toHaveTextContent("NEWS2-style score 11 (partial). Contributing: Heart Rate 134 bpm (score 3)");
+    // breakdown from the API's per-parameter scores; missing parameters are not invented
+    expect(screen.getByTestId("news2-heart_rate")).toHaveTextContent("Heart Rate134 bpmscore 3");
+    expect(screen.getByTestId("news2-spo2")).toHaveTextContent("SpO₂ (Oxygen Saturation)Not available");
+    expect(screen.getByTestId("news2-total")).toHaveTextContent("Total score11 from 4 available parameters");
+    expect(screen.getByTestId("news2-breakdown")).toHaveTextContent("Uses up to 4 of the 7 standard NEWS2 parameters");
+    expect(within(screen.getByTestId("news2-classes")).getByText("7 or higher").closest("li")).toHaveAttribute("aria-current", "true");
     expect((screen.getByTestId("technical-details") as HTMLDetailsElement).open).toBe(false);
     expect(screen.getByTestId("sim-start")).toBeInTheDocument();
     expect(screen.getByText(/Demo \/ Simulation/)).toBeInTheDocument();
@@ -188,27 +194,41 @@ class ScriptedSocket {
 describe("Doctor notifications", () => {
   it("pops up only events newer than the connection cursor, once each, on any doctor page", async () => {
     window.location.hash = "#/doctor/alerts";
+    const { FakeAudioContext } = await import("./testAudio");
+    const { _resetForTests } = await import("./alertSound");
+    FakeAudioContext.instances = []; vi.stubGlobal("AudioContext", FakeAudioContext); localStorage.clear(); _resetForTests();
     vi.stubGlobal("WebSocket", ScriptedSocket);
     vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor }, "/api/clinical/overview": overview, "/api/alerts": { alerts: [] } }));
     render(<App />);
     await waitFor(() => expect(ScriptedSocket.last).not.toBeNull());
     const ws = ScriptedSocket.last!;
+    fireEvent.pointerDown(document.body);                                     // user interaction unlocks audio
+    await waitFor(() => expect(FakeAudioContext.instances[0]?.state).toBe("running"));
+    const beeps = () => FakeAudioContext.instances[0].starts.length;
     // history at connect: shown in the bell, never as a pop-up
     ws.send({ type: "hello", cursor: 10, latestId: 10, unread: 0, items: [ev(10, "URGENT", { read: true })] });
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryAllByTestId("toast")).toHaveLength(0);
+    expect(beeps()).toBe(0);                                                  // history: no sound
     ws.send({ type: "events", cursor: 12, unread: 2, items: [ev(11, "REVIEW"), ev(12, "URGENT")] });
     await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(2));
+    expect(beeps()).toBe(3);                                                  // one URGENT pattern for the batch
     ws.send({ type: "events", cursor: 12, unread: 2, items: [ev(12, "URGENT")] });   // repeated delivery
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.getAllByTestId("toast")).toHaveLength(2);
+    expect(beeps()).toBe(3);                                                  // repeated delivery: no sound
+    fireEvent.click(screen.getByTestId("sound-toggle"));                      // mute
+    expect(screen.getByTestId("sound-toggle")).toHaveAttribute("aria-pressed", "false");
+    ws.send({ type: "events", cursor: 13, unread: 3, items: [ev(13, "WATCH")] });
+    await waitFor(() => expect(screen.getAllByTestId("toast")).toHaveLength(3));
+    expect(beeps()).toBe(3);                                                  // muted: pop-up still shown, no sound
     const urgent = screen.getAllByTestId("toast").find((t) => t.getAttribute("data-level") === "URGENT")!;
     expect(urgent).toHaveAttribute("role", "alert");
     expect(within(urgent).getByTestId("toast-patient")).toHaveTextContent("Ariane Kirlin");
-    expect(screen.getByTestId("bell-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("bell-count")).toHaveTextContent("3");
     fireEvent.click(within(urgent).getByLabelText("Dismiss notification"));
-    expect(screen.getAllByTestId("toast")).toHaveLength(1);
-    fireEvent.click(screen.getByTestId("toast-view"));
+    expect(screen.getAllByTestId("toast")).toHaveLength(2);
+    fireEvent.click(screen.getAllByTestId("toast-view")[0]);
     expect(window.location.hash).toBe("#/doctor/patients/p1");
   });
 });
@@ -231,5 +251,81 @@ describe("Data management helpers", () => {
     expect(a).toHaveAttribute("href", "https://sparkmeet-web.onrender.com/");
     expect(a).toHaveAttribute("target", "_blank");
     expect(a).toHaveAttribute("rel", "noopener noreferrer");
+  });
+});
+
+describe("Early Detection Lab", () => {
+  it("plays back the same readings on both sides and reports 'Not detected' honestly", async () => {
+    window.location.hash = "#/doctor/lab";
+    const step = (t: string, spo2: number, level: string, alarm = false) => ({
+      t, readings: { spo2 }, latest: { spo2, heart_rate: 80, respiratory_rate: 16, body_temperature: 37 },
+      comparator: { alarm, breaches: alarm ? [{ vital: "spo2", value: spo2, text: `SpO₂ ${spo2} % below 90` }] : [] },
+      engine: { level, news2: level === "NORMAL" ? 0 : 1, measured: 4, alerts: level === "NORMAL" ? [] : [{ level, ruleType: "news2-parameter", vital: "spo2", vitalLabel: "SpO2", value: spo2, unit: "%", rule: "", reason: "", score: 1, baseline: null }], trend: false, suppressedNow: [] },
+      spo2Baseline: 97,
+    });
+    const analysis = {
+      comparator: { name: "Fixed-threshold comparator (demo)", description: "d", limits: {} }, engine: { name: "e", description: "d" },
+      start: "2026-11-12T10:00:00Z", end: "2026-11-12T10:01:00Z",
+      steps: [step("2026-11-12T10:00:00Z", 97, "NORMAL"), step("2026-11-12T10:01:00Z", 95, "WATCH")],
+      firstWarning: { index: 1, t: "2026-11-12T10:01:00Z", minutesFromStart: 1, latest: {}, level: "WATCH", news2: 1, alerts: [] },
+      firstTrendWarning: null, firstComparatorAlert: null, advantageMinutes: null, comparatorAlarmSteps: 0, engineAlertSteps: 1,
+      artifacts: { suppressed: [], comparatorAlarmsFromArtifacts: [], engineAlertsDuringArtifacts: 0 },
+    };
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor },
+      "/api/patients": { count: 1, patients: [{ id: "p1", name: "Ariane992 Kirlin939", source: "synthea" }] },
+      "/api/early-detection/prepared": { deterioration: { runId: "r1", state: "completed", progress: 1 } },
+      "/api/early-detection/runs/r1": { ready: true, session: { state: "completed", progress: 1, persisted: 8, eventsTotal: 8, scenarioName: "x", lastError: null }, analysis } }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("lab-prepared")).toHaveTextContent("plays instantly"));
+    fireEvent.click(screen.getByTestId("lab-run-early"));
+    await waitFor(() => expect(screen.getByTestId("lab-engine")).toBeInTheDocument());
+    expect(screen.getAllByTestId("lab-spo2").map((e) => e.textContent)).toEqual(["97%", "97%"]);   // same reading on both sides
+    fireEvent.click(screen.getByTestId("lab-skip"));
+    await waitFor(() => expect(screen.getByTestId("lab-summary")).toBeInTheDocument());
+    expect(screen.getByTestId("lab-sum-trad")).toHaveTextContent("Not detected");
+    expect(screen.getByTestId("lab-sum-engine")).toHaveTextContent("T+1 min");
+    expect(screen.getByTestId("lab-advantage")).toHaveTextContent("Only AROGYA DRISHTI detected it");
+    expect(screen.getByTestId("lab-disclaimer")).toHaveTextContent("Not for medical diagnosis");
+  });
+});
+
+describe("Sensor Reliability Lab", () => {
+  it("shows the comparator alert, the sensor-quality warning and measured results on identical readings", async () => {
+    window.location.hash = "#/doctor/sensor-lab";
+    const mk = (t: string, spo2: number, hr: number, alarm: boolean, flagged: boolean) => ({
+      t, readings: { spo2, heart_rate: hr }, latest: { spo2, heart_rate: hr, respiratory_rate: 15, body_temperature: 36.8 },
+      comparator: { alarm, breaches: alarm ? [{ vital: "spo2", value: spo2, text: `SpO₂ ${spo2} % below 90` }] : [] },
+      engine: { level: "NORMAL", news2: 0, measured: 4, alerts: [], trend: false,
+        suppressedNow: flagged ? [{ vital: "spo2", value: spo2, reason: "probe-off: zero reading (HR and SpO2 both 0)" }] : [] },
+      spo2Baseline: 97,
+    });
+    const analysis = {
+      comparator: { name: "c", description: "d", limits: {} }, engine: { name: "e", description: "d" },
+      start: "2026-11-12T10:00:00Z", end: "2026-11-12T10:02:00Z",
+      steps: [mk("2026-11-12T10:00:00Z", 97, 74, false, false), mk("2026-11-12T10:01:00Z", 0, 0, true, true), mk("2026-11-12T10:02:00Z", 97, 74, false, false)],
+      firstWarning: null, firstTrendWarning: null, firstComparatorAlert: null, advantageMinutes: null, comparatorAlarmSteps: 1, engineAlertSteps: 0,
+      artifacts: { suppressed: [{ vital: "spo2", value: 0, reason: "probe-off", effective: "2026-11-12T10:01:00Z" }], comparatorAlarmsFromArtifacts: [], engineAlertsDuringArtifacts: 0 },
+    };
+    const side = (alerts: number, falses: number, art: number | null) => ({ clinicalAlerts: alerts, falseClinicalAlerts: falses, artifactsDetected: art, episodes: alerts ? [{ index: 1, minutes: 1, false: true, artifactOnly: true, trigger: ["x"] }] : [],
+      genuineDeterioration: { applicable: false, detected: null, minutes: null, level: null }, peakLevel: "NORMAL", readingsFlaggedNotLabelled: 0 });
+    const metrics = { definitions: "defs", labelledArtifactReadings: 2, scenarioHasDeterioration: false, fixed: side(1, 1, null), engine: side(0, 0, 2), falseAlertsAvoided: 1 };
+    vi.stubGlobal("fetch", routeFetch({ ...common, "/api/auth/me": { authRequired: true, user: doctor },
+      "/api/patients": { count: 1, patients: [{ id: "p1", name: "Alex Lang", source: "synthea" }] },
+      "/api/early-detection/prepared": { artifact: { runId: "r9", state: "completed", progress: 1 } },
+      "/api/sensor-lab/runs/r9": { ready: true, session: { state: "completed", progress: 1, persisted: 1, eventsTotal: 1, scenarioName: "x", lastError: null }, analysis, metrics } }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId("sl-patient")).toHaveValue("p1"));
+    fireEvent.click(screen.getByTestId("sl-run"));
+    await waitFor(() => expect(screen.getByTestId("sl-fixed-status")).toHaveTextContent("CLINICAL ALERT"), { timeout: 3000 });
+    expect(screen.getByTestId("sl-sensor-warning")).toHaveTextContent("Possible sensor disconnection detected. Oxygen readings may be unreliable. Please check the wearable device.");
+    expect(screen.getByTestId("sl-engine-status")).toHaveTextContent("No clinical alert");
+    expect(screen.getAllByTestId("sl-spo2").map((e) => e.textContent)).toEqual(["0%", "0%"]);
+    fireEvent.click(screen.getByTestId("sl-skip"));
+    await waitFor(() => expect(screen.getByTestId("sl-results")).toBeInTheDocument());
+    const rows = screen.getAllByTestId("sl-row").map((r) => r.textContent);
+    expect(rows[1]).toBe("False clinical alerts10");
+    expect(rows[2]).toContain("Not available");
+    expect(rows[3]).toContain("Not applicable");
+    expect(screen.getByTestId("sl-avoided")).toHaveTextContent("1 false clinical alert avoided");
   });
 });

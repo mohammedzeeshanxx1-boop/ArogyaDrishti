@@ -47,7 +47,7 @@ export function Login({ onSignedIn, notice }: { onSignedIn: (u: User) => void; n
           <button type="submit" disabled={busy} data-testid="sign-in"
             className="w-full rounded-lg bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-teal-800 disabled:opacity-50">{busy ? "Signing in…" : "Sign in"}</button>
           <p className="flex items-start gap-2 text-xs text-navy-500"><IconShield className="mt-0.5 shrink-0" width={16} height={16} />
-            Accounts are created on this computer with <code className="rounded bg-slate-100 px-1">scripts/dev/accounts.sh</code>. Each password is random; credentials are in <code className="rounded bg-slate-100 px-1">.local/api/credentials.json</code>.</p>
+            Welcome back. Sign in securely to continue.</p>
         </form>
       </div>
     </div>

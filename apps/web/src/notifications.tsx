@@ -5,6 +5,9 @@ import {
 } from "./api";
 import { IconAlert, IconBell, IconCheck, IconX } from "./components/icons";
 import { LevelBadge, ago, fmtDateTime, fmtTime } from "./components/ui";
+import { LEVEL_MESSAGE } from "./components/risk";
+import { playForEvents, setEnabled, soundState, subscribe, testSound, unlockOnFirstInteraction, type SoundState } from "./alertSound";
+import { IconMute, IconVolume } from "./components/icons";
 
 /**
  * Doctor notifications. The server's recorded risk events are the only source: nothing is assessed here.
@@ -45,6 +48,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     if (fresh.length) {
       setItems((cur) => [...[...fresh].reverse(), ...cur.filter((c) => !fresh.some((f) => f.id === c.id))].slice(0, 50));
       setToasts((cur) => [...[...fresh].reverse().filter((e) => !e.read), ...cur].slice(0, 5));
+      // Sound only for the same new, unread events that pop up (never history or repeated deliveries).
+      playForEvents(fresh.filter((e) => !e.read).map((e) => e.level));
       fresh.forEach((e) => {
         const ms = AUTO_DISMISS[e.level];
         if (ms) window.setTimeout(() => dismiss(e.id), ms);
@@ -52,6 +57,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     setUnread(unreadCount);
   }, [dismiss]);
+
+  useEffect(() => unlockOnFirstInteraction(), []);   // browsers allow audio only after a user gesture
 
   useEffect(() => {
     let alive = true;
@@ -67,7 +74,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         try {
           if (cursor.current === null) {           // never connected: establish the cursor without replaying history
             const f = await fetchNotifications();
-            cursor.current = f.latestId; f.items.forEach((i) => seen.current.add(i.id)); setItems(f.items); setUnread(f.unread);
+            // Only establishes the polling cursor. Items are not marked as seen here: if the WebSocket's first
+            // message is slow (e.g. right after an API restart), it still delivers events newer than its own
+            // connection cursor, and those must still pop up. Older history is never sent as new events.
+            cursor.current = f.latestId; setItems(f.items); setUnread(f.unread);
             return;
           }
           const f = await fetchNotifications(cursor.current, 50);
@@ -168,7 +178,8 @@ function ToastStack({ toasts, onDismiss, onView }: { toasts: AlertEvent[]; onDis
                   <button type="button" onClick={() => onDismiss(t.id)} aria-label="Dismiss notification" className="-mr-1 -mt-1 rounded p-1 text-navy-500 hover:bg-black/5"><IconX width={16} height={16} /></button>
                 </div>
                 <div className="mt-0.5 flex items-center gap-2"><LevelBadge level={t.level} /><span className="text-xs text-navy-500">{fmtTime(t.measured_at ?? t.created_at)}</span></div>
-                <p className="mt-1.5 text-sm text-navy-900">{t.summary}</p>
+                {t.level !== "NORMAL" && <p className="mt-1.5 text-sm font-semibold text-navy-900">{LEVEL_MESSAGE[t.level]}</p>}
+                <p className="mt-1 text-sm text-navy-700">{t.summary}</p>
                 <button type="button" onClick={() => onView(t)} data-testid="toast-view"
                   className="mt-3 rounded-lg bg-navy-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy-700">View patient</button>
               </div>
@@ -236,6 +247,24 @@ export function NotificationBell() {
           <a href="#/doctor/alerts" onClick={() => setOpen(false)} className="block border-t border-slate-100 px-4 py-2.5 text-center text-sm font-semibold text-teal-700 hover:bg-slate-50">Open alert history</a>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Header control: alert sound on/off (saved in this browser) and a test button. */
+export function SoundToggle() {
+  const [s, setS] = useState<SoundState>(soundState());
+  const [blocked, setBlocked] = useState(false);
+  useEffect(() => subscribe(setS), []);
+  if (!s.supported) return null;
+  const Icon = s.enabled ? IconVolume : IconMute;
+  return (
+    <div className="flex items-center gap-1" data-testid="sound-controls">
+      <button type="button" onClick={() => setEnabled(!s.enabled)} aria-pressed={s.enabled} data-testid="sound-toggle"
+        aria-label={s.enabled ? "Alert sound on. Turn off" : "Alert sound off. Turn on"} title={s.enabled ? "Alert sound on" : "Alert sound off"}
+        className={`rounded-full p-2 hover:bg-slate-100 ${s.enabled ? "text-navy-700" : "text-slate-400"}`}><Icon width={20} height={20} /></button>
+      <button type="button" data-testid="sound-test" onClick={async () => setBlocked(!(await testSound("REVIEW")))}
+        className="hidden rounded-md px-2 py-1 text-xs font-semibold text-navy-700 hover:bg-slate-100 sm:inline">{blocked ? "Sound blocked" : "Test sound"}</button>
     </div>
   );
 }

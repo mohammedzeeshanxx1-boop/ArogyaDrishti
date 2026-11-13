@@ -8,6 +8,7 @@ import { acknowledgeAlert, exportUrls } from "../api";
 import { IconDownload } from "../components/icons";
 import { useNotifications } from "../notifications";
 import { VideoLink } from "./data";
+import { LabPromo } from "./lab";
 import { IconChevron, IconSearch } from "../components/icons";
 import { RiskPanel } from "../components/risk";
 import { SimulationPanel } from "../components/SimulationPanel";
@@ -68,6 +69,7 @@ export function DoctorDashboard() {
   return (
     <div className="space-y-6">
       {error && <ErrorNote>Could not load the patient overview: {error}</ErrorNote>}
+      <LabPromo />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat testid="stat-total" label="Patients" value={v(pts.length)} hint="Discharged patients in the FHIR server" />
         <Stat testid="stat-monitored" tone="teal" label="With current monitoring data" value={v(pts.filter((p) => p.monitoring.monitoringStatus === "active").length)}

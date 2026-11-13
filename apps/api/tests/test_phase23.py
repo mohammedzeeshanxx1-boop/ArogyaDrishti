@@ -113,7 +113,8 @@ def test_patient_accounts_cannot_use_doctor_features(client):
                                ("post", "/api/alerts/1/acknowledge", None), ("post", "/api/patients", {"name": "A B"}),
                                ("post", "/api/patients/p-alex/account", {}), ("post", "/api/import/patients", {"rows": []}),
                                ("post", "/api/import/observations", {"rows": []}), ("get", "/api/export/patients.csv", None),
-                               ("get", "/api/export/patients/p-alex/observations.csv", None), ("get", "/api/export/patients/p-alex/record.csv", None)]:
+                               ("get", "/api/export/patients/p-alex/observations.csv", None), ("get", "/api/export/patients/p-alex/record.csv", None),
+                               ("post", "/api/early-detection/runs", {"patientId": "p-alex", "scenario": "deterioration"}), ("get", "/api/early-detection/prepared?patientId=p-alex", None)]:
         r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
         assert r.status_code == 403, (path, r.status_code)
     from starlette.websockets import WebSocketDisconnect
@@ -132,3 +133,29 @@ def test_doctor_notification_endpoints_and_socket(client):
         assert hello["type"] == "hello" and hello["cursor"] == f["latestId"]
     r = client.post("/api/patients", json={"name": "X", "birthDate": "bad", "gender": "robot", "requestId": "req-12345678"})
     assert r.status_code == 422 and {e["field"] for e in r.json()["errors"]} >= {"name", "birth_date", "gender"}
+
+
+def test_notification_explains_contributing_parameters_from_stored_breakdown(db):
+    notifications.feed(db, "doctor")
+    e = _event(db, "p9", 135)                                   # URGENT: SpO2 88, HR 135, RR 30
+    stored = monitoring.alert_events(db, "p9", 1)[0]
+    assert stored["news2_json"]                                  # breakdown stored with the event as computed by the engine
+    s = notifications.feed(db, "doctor", after=e["id"] - 1)["items"][0]["summary"]
+    assert "Partial NEWS2-style score" in s and "Classification: 7 or higher → URGENT" in s and "4 of 7 NEWS2 parameters" in s
+    for name in ("SpO₂ 88 % (score 3)", "Heart Rate 135 bpm (score 3)", "Respiratory Rate 30 breaths/min (score 3)", "Body Temperature 36.8 °C (score 0)"):
+        assert name in s, (name, s)
+    assert "4 of 7 measures" not in s
+
+
+def test_older_events_without_breakdown_do_not_invent_parameters():
+    s = notifications.summary({"kind": "escalated", "level": "URGENT", "previous_level": "REVIEW", "vital": None, "value": 8.0, "reason": "x"})
+    assert "partial NEWS2-style score 8" in s and "not recorded" in s and "SpO₂" not in s
+
+
+def test_missing_parameter_is_reported_as_not_available():
+    import json
+    e = {"kind": "raised", "level": "WATCH", "previous_level": "NORMAL", "vital": None, "value": 2, "reason": "x",
+         "news2_json": json.dumps({"total": 2, "measured": 3, "of": 7, "parameters": {"spo2": {"value": 95, "score": 1}, "heart_rate": {"value": 95, "score": 1},
+                                                                                      "respiratory_rate": {"value": 16, "score": 0}}})}
+    s = notifications.summary(e)
+    assert "not available: Body Temperature" in s and "3 of 7 NEWS2 parameters" in s and "Classification: 1–4 → WATCH" in s

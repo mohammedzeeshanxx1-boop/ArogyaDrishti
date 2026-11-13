@@ -1,7 +1,11 @@
 import { useState } from "react";
 import type { AlertEvent } from "../api";
 import { Empty, LevelBadge, VITAL_META, fmtDateTime } from "./ui";
+import { LEVEL_MESSAGE } from "./risk";
 
+const ACCENT: Record<AlertEvent["level"], string> = {
+  URGENT: "border-red-600 bg-red-50/60", REVIEW: "border-orange-500 bg-orange-50/60", WATCH: "border-amber-400 bg-amber-50/50", NORMAL: "border-teal-500 bg-teal-50/40",
+};
 const KIND: Record<AlertEvent["kind"], string> = { raised: "Raised", escalated: "Escalated", "de-escalated": "De-escalated", resolved: "Resolved" };
 
 export function AlertList({ alerts, names, showPatient = false, compact = false, limit, onAcknowledge }: {
@@ -16,16 +20,26 @@ export function AlertList({ alerts, names, showPatient = false, compact = false,
   const shown = limit && !all ? alerts.slice(0, limit) : alerts;
   return (
     <>
-    <ul className="divide-y divide-slate-100" data-testid="alert-list">
+    <ul className={compact ? "divide-y divide-slate-100" : ""} data-testid="alert-list">
       {shown.map((a) => (
-        <li key={a.id} className={compact ? "py-2.5" : "py-3"} title={a.observation ? `Source: ${a.observation}` : undefined}>
+        <li key={a.id} className={compact ? "py-2.5" : `my-2 rounded-xl border-l-4 py-3 pl-4 pr-3 ${ACCENT[a.level]}`} title={a.observation ? `Source: ${a.observation}` : undefined} data-level={a.level}>
           <div className="flex flex-wrap items-center gap-2">
             <LevelBadge level={a.level} />
             <span className="text-xs font-semibold text-navy-700">{KIND[a.kind]}{a.previous_level ? ` from ${a.previous_level}` : ""}</span>
             {showPatient && <a className="text-sm font-semibold text-teal-700 hover:underline" href={`#/doctor/patients/${encodeURIComponent(a.patient_id)}`}>{a.patientName ?? names?.[a.patient_id] ?? "Patient"}</a>}
             <span className="ml-auto text-xs text-navy-500">{fmtDateTime(a.measured_at ?? a.created_at)}</span>
           </div>
-          {!compact && <p className="mt-1 text-sm text-navy-900">{a.reason}</p>}
+          {!compact && a.level !== "NORMAL" && <p className="mt-1.5 text-sm font-semibold text-navy-900" data-testid="alert-message">{LEVEL_MESSAGE[a.level]}</p>}
+          {!compact && <p className="mt-1 text-sm text-navy-700">{a.summary ?? a.reason}</p>}
+          {!compact && !a.vital && /^NEWS2-style partial aggregate/.test(a.reason ?? "") ? (
+            <div className="mt-1.5 min-w-0 rounded-lg bg-white/70 px-3 py-2 text-xs text-navy-700 ring-1 ring-slate-200" data-testid="alert-news2">
+              <p className="font-semibold text-navy-900">NEWS2-style score {a.value} (partial)</p>
+              <p className="mt-0.5">Parameters: SpO₂ (Oxygen Saturation), Heart Rate, Respiratory Rate, Body Temperature (up to 4 of the 7 NEWS2 parameters).
+                {/a single parameter scores 3/.test(a.reason) ? " A single parameter scored 3." : ""}</p>
+              <p className="mt-0.5">Classification: 0 → NORMAL · 1–4 → WATCH · 5–6 or any single parameter 3 → REVIEW · 7 or higher → URGENT</p>
+              {!(a as { news2_json?: string | null }).news2_json && <p className="mt-0.5 text-navy-500">Per-parameter readings and scores were not stored with this earlier alert; the patient's Risk assessment shows the current breakdown.</p>}
+            </div>
+          ) : !compact && a.summary && a.reason && a.summary !== a.reason && <p className="mt-0.5 text-xs text-navy-500">Rule: {a.reason}{a.rule ? ` (${a.rule})` : ""}</p>}
           {!compact && (a.acknowledgements?.length || onAcknowledge) ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs">
               {(a.acknowledgements ?? []).map((k) => (
@@ -40,7 +54,7 @@ export function AlertList({ alerts, names, showPatient = false, compact = false,
             </div>
           ) : null}
           {!compact && a.vital && a.value !== null && (
-            <p className="mt-0.5 text-xs text-navy-500">{VITAL_META[a.vital]?.label ?? a.vital}: {Number(a.value).toFixed(VITAL_META[a.vital]?.decimals ?? 1)} {VITAL_META[a.vital]?.unit ?? a.unit ?? ""}</p>
+            <p className="mt-0.5 text-xs text-navy-700">Triggering reading: <strong>{VITAL_META[a.vital]?.label ?? a.vital} {Number(a.value).toFixed(VITAL_META[a.vital]?.decimals ?? 1)} {VITAL_META[a.vital]?.unit ?? a.unit ?? ""}</strong></p>
           )}
         </li>
       ))}

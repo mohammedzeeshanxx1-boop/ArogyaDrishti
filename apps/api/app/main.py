@@ -36,7 +36,7 @@ from .db import check_db, ingestion_events, init_db
 from .fhir import FhirClient, FhirUnavailable, outcome, outcome_issue, probe_fhir, summarize_outcome
 from .ingest import ingest_observation
 from .patients import PORTAL_ID_SYSTEM, _is_portal, _is_synthea, _name, list_patients, patient_profile, patient_summary
-from . import auth, datamgmt, detector, evaluation, monitoring, notifications, scale2
+from . import auth, datamgmt, detector, early_detection, sensor_lab, evaluation, monitoring, notifications, scale2
 from .risk import VITAL_LABEL, to_celsius
 from .replay import store as replay_store
 from .replay.engine import SPEEDS, ReplayConflict, ReplayManager
@@ -83,6 +83,11 @@ class ImportRequest(BaseModel):
     confirm: bool = False
     fileName: str = Field("upload.csv", max_length=120)
     importId: str = Field(pattern=r"^[A-Za-z0-9-]{8,64}$")
+
+
+class LabStart(BaseModel):
+    patientId: str
+    scenario: str = Field(pattern="^(deterioration|artifact)$")
 
 
 class LoginRequest(BaseModel):
@@ -294,10 +299,16 @@ def create_app(
         hit = getattr(app_.state, "patients_cache", None)
         if hit and not refresh and (datetime.now(timezone.utc) - hit[0]).total_seconds() < 600:
             return hit[1]
-        items = await list_patients(app_.state.fhir)
-        body = {"count": len(items), "synthetic": True, "patients": items}
-        app_.state.patients_cache = (datetime.now(timezone.utc), body)
-        return body
+        # Single-flight: concurrent callers share one rebuild instead of each querying HAPI.
+        task = getattr(app_.state, "patients_task", None)
+        if task is None or task.done():
+            async def build() -> dict:
+                items = await list_patients(app_.state.fhir)
+                body = {"count": len(items), "synthetic": True, "patients": items}
+                app_.state.patients_cache = (datetime.now(timezone.utc), body)
+                return body
+            task = app_.state.patients_task = asyncio.ensure_future(build())
+        return await asyncio.shield(task)
 
     @app.get("/api/patients/{pid}/profile")
     async def profile(pid: str, request: Request):
@@ -455,6 +466,15 @@ def create_app(
         now = datetime.now(timezone.utc)
         if hit and (now - hit[0]).total_seconds() < 5:
             return hit[1]
+        # Single-flight: while one computation runs, other requests wait for it rather than starting another
+        # (the dashboard polls; overlapping computations were piling up on HAPI).
+        running = getattr(request.app.state, "overview_task", None)
+        if running is not None and not running.done():
+            return await asyncio.shield(running)
+        task = request.app.state.overview_task = asyncio.ensure_future(_compute_overview(request, now))
+        return await asyncio.shield(task)
+
+    async def _compute_overview(request: Request, now: datetime) -> dict:
         pts = (await cached_patients(request.app))["patients"]
         sem = asyncio.Semaphore(4)
 
@@ -739,6 +759,75 @@ def create_app(
         obs = await fhir(request).search_by_date("Observation", {"subject": f"Patient/{pid}"}, limit=50_000)
         rows = datamgmt.observation_rows(obs, pid, name)
         return csv_response(datamgmt.to_csv(datamgmt.OBS_HEADER, rows), f"observations-{name}.csv")
+
+    # ------------------------------------------------------------ Early Detection Lab (doctor only)
+    @app.post("/api/early-detection/runs", status_code=201)
+    async def lab_start(body: LabStart, request: Request):
+        """Replays an existing seeded scenario into HAPI (batch speed, session-tagged, ending 4 h before now).
+        It does not switch the patient's live view, trigger live assessments or create alert events."""
+        if not FHIR_ID.match(body.patientId):
+            return fhir_error(400, "invalid", "patientId must be a FHIR id")
+        if await fhir(request).read("Patient", body.patientId) is None:
+            return fhir_error(404, "not-found", f"Patient/{body.patientId} not found")
+        mgr = request.app.state.replay
+        spec = REPLAY_SCENARIOS[body.scenario]
+        # The scenario ends 4 h before now: outside the live 60-minute monitoring window, so lab data never appears
+        # as the patient's current readings on the live dashboard, overview or alerts.
+        anchor = (datetime.now(timezone.utc) - timedelta(minutes=spec.default_duration_minutes + 240)).replace(second=0, microsecond=0)
+        try:
+            s = await mgr.create(body.patientId, body.scenario, None, anchor, None, None, "batch", 100)
+            s.on_batch = None   # lab runs are analysed in the lab only: no live risk assessment, alert events or pop-ups
+            await mgr.start(s.id)
+            request.app.state.__dict__.setdefault("lab_runs", {})[(body.patientId, body.scenario)] = s.id
+        except ReplayConflict as exc:
+            return fhir_error(409, "conflict", f"{exc}. Stop the running simulation or replay first.")
+        except ValueError as exc:
+            return _replay_error(exc)
+        return {"runId": s.id, "session": s.public()}
+
+    @app.get("/api/early-detection/prepared")
+    async def lab_prepared(patientId: str, request: Request):
+        """Runs already prepared in this API process for the patient (so a demo can start without re-writing data)."""
+        runs = request.app.state.__dict__.get("lab_runs", {})
+        out = {}
+        for sc in ("deterioration", "artifact"):
+            s = request.app.state.replay.get(runs.get((patientId, sc), ""))
+            if s:
+                p = s.public()
+                out[sc] = {"runId": s.id, "state": p["state"], "progress": p["progress"], "preparedFor": p["anchor"]}
+        return out
+
+    @app.get("/api/early-detection/runs/{sid}")
+    async def lab_get(sid: str, request: Request):
+        s = request.app.state.replay.get(sid)
+        if s is None:
+            return fhir_error(404, "not-found", f"run {sid} not found")
+        pub = s.public()
+        if pub["state"] != "completed":
+            return {"ready": False, "session": pub}
+        cache = request.app.state.__dict__.setdefault("lab_cache", {})
+        if sid not in cache:
+            readings, _ = await evaluation.session_readings(fhir(request), sid)
+            eligible = await scale2.cached_eligible(fhir(request), s.patient_id)
+            cache[sid] = await asyncio.to_thread(early_detection.analyse, readings, eligible)
+        return {"ready": True, "session": pub, "analysis": cache[sid]}
+
+    # ------------------------------------------------------------ Sensor Reliability Lab (doctor only)
+    @app.get("/api/sensor-lab/runs/{sid}")
+    async def sensor_lab_get(sid: str, request: Request):
+        """False-alert comparison for a replay run started with POST /api/early-detection/runs.
+        Detection runs first on the stored readings; the scenario labels are read afterwards (evaluation only)."""
+        s = request.app.state.replay.get(sid)
+        if s is None:
+            return fhir_error(404, "not-found", f"run {sid} not found")
+        pub = s.public()
+        if pub["state"] != "completed":
+            return {"ready": False, "session": pub}
+        cache = request.app.state.__dict__.setdefault("sensor_lab_cache", {})
+        if sid not in cache:
+            eligible = await scale2.cached_eligible(fhir(request), s.patient_id)
+            cache[sid] = {**await sensor_lab.evaluate_run(fhir(request), settings.sqlite_path, sid, eligible), "scenario": s.params.get("scenario")}
+        return {"ready": True, "session": pub, **cache[sid]}
 
     @app.get("/api/monitoring/status")
     async def monitoring_status(request: Request) -> dict:

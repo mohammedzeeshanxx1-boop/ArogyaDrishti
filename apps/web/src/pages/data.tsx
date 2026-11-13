@@ -157,6 +157,31 @@ const TEMPLATES = {
   observations: { columns: "patient_id,timestamp,heart_rate_bpm,spo2_percent,respiratory_rate_per_min,temperature_c", example: "<patient id>,2026-11-12T08:30:00Z,82,96,16,37.1", required: ["patient_id", "timestamp"] },
 } as const;
 
+/** One CSV template line: label, scrollable monospace text (never wider than the card) and a Copy button. */
+function CsvLine({ label, text, testid }: { label: string; text: string; testid: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const t = document.createElement("textarea");
+        t.value = text; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove();
+      }
+      setCopied(true); window.setTimeout(() => setCopied(false), 1500);
+    } catch { setCopied(false); }
+  };
+  return (
+    <div className="min-w-0">
+      <p className="mb-1 font-medium text-navy-900">{label}</p>
+      <div className="flex min-w-0 items-stretch gap-2">
+        <code className="block min-w-0 max-w-full flex-1 overflow-x-auto whitespace-pre rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-[11px] text-navy-900" data-testid={testid}>{text}</code>
+        <button type="button" onClick={() => void copy()} aria-label={`Copy ${label.toLowerCase()}`} data-testid={`${testid}-copy`}
+          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 text-[11px] font-semibold text-navy-900 hover:bg-slate-100">{copied ? "Copied" : "Copy"}</button>
+      </div>
+    </div>
+  );
+}
+
 function ImportCsv({ onImported }: { onImported: () => void }) {
   const [kind, setKind] = useState<"patients" | "observations">("patients");
   const [file, setFile] = useState<{ name: string; header: string[]; rows: Record<string, string>[] } | null>(null);
@@ -192,17 +217,17 @@ function ImportCsv({ onImported }: { onImported: () => void }) {
   };
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="CSV type">
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="CSV type">
         {(["patients", "observations"] as const).map((k) => (
           <button key={k} type="button" role="radio" aria-checked={kind === k} onClick={() => setKind(k)} data-testid={`import-kind-${k}`}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold ${kind === k ? "bg-navy-900 text-white" : "border border-slate-300 bg-white text-navy-900"}`}>
+            className={`min-w-0 rounded-lg px-4 py-2 text-center text-sm font-semibold ${kind === k ? "bg-navy-900 text-white" : "border border-slate-300 bg-white text-navy-900"}`}>
             {k === "patients" ? "Patient records" : "Vital-sign observations"}</button>
         ))}
       </div>
-      <div className="rounded-lg bg-slate-50 p-3 text-xs text-navy-700">
-        <p>Columns: <code>{TEMPLATES[kind].columns}</code></p>
-        <p className="mt-1">Example: <code>{TEMPLATES[kind].example}</code></p>
-        <p className="mt-1">{kind === "patients" ? "Dates as YYYY-MM-DD; gender male, female, other or unknown; discharge_date optional. Up to 200 rows."
+      <div className="min-w-0 space-y-2 rounded-lg bg-slate-50 p-3 text-xs text-navy-700">
+        <CsvLine label="Columns" text={TEMPLATES[kind].columns} testid="csv-columns" />
+        <CsvLine label="Example" text={TEMPLATES[kind].example} testid="csv-example" />
+        <p className="break-words">{kind === "patients" ? "Dates as YYYY-MM-DD; gender male, female, other or unknown; discharge_date optional. Up to 200 rows."
           : "Timestamps in ISO 8601 with a timezone. Units: bpm, %, breaths/min, °C. Leave a value empty if not measured. Stored as FHIR Observations labelled \"CSV import\" (not wearable readings). Up to 100 rows."}</p>
       </div>
       <input ref={inputRef} type="file" accept=".csv,text/csv" onChange={(e) => void onFile(e.target.files?.[0])} data-testid="csv-file"

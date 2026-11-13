@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchMe, fetchStatus, logout, setUnauthorizedHandler, type StatusResponse, type User } from "./api";
-import { IconBell, IconChart, IconDatabase, IconFile, IconGrid, IconPulse, IconUser, IconUsers, IconVideo } from "./components/icons";
-import { NotificationBell, NotificationProvider } from "./notifications";
+import { IconBell, IconChart, IconDatabase, IconFile, IconFlask, IconGrid, IconPulse, IconShield, IconUser, IconUsers, IconVideo } from "./components/icons";
+import { EarlyDetectionLab } from "./pages/lab";
+import { SensorReliabilityLab } from "./pages/sensorlab";
+import { NotificationBell, NotificationProvider, SoundToggle } from "./notifications";
 import { DataManagement, VideoConsultation } from "./pages/data";
 import { Shell, type NavItem } from "./components/Shell";
 import { displayName } from "./components/ui";
@@ -14,6 +16,8 @@ const DOCTOR_NAV: NavItem[] = [
   { href: "#/doctor", label: "Dashboard", icon: IconGrid, match: (h) => h === "#/doctor" || h === "#/doctor/" },
   { href: "#/doctor/patients", label: "Patients", icon: IconUsers, match: (h) => h.startsWith("#/doctor/patients") },
   { href: "#/doctor/alerts", label: "Alerts", icon: IconBell, match: (h) => h.startsWith("#/doctor/alerts") },
+  { href: "#/doctor/lab", label: "Early Detection Lab", icon: IconFlask, match: (h) => h.startsWith("#/doctor/lab") },
+  { href: "#/doctor/sensor-lab", label: "Sensor Reliability Lab", icon: IconShield, match: (h) => h.startsWith("#/doctor/sensor-lab") },
   { href: "#/doctor/data", label: "Data Management", icon: IconDatabase, match: (h) => h.startsWith("#/doctor/data") },
   { href: "#/doctor/video", label: "Video Consultation", icon: IconVideo, match: (h) => h.startsWith("#/doctor/video") },
 ];
@@ -52,6 +56,8 @@ function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: str
   const [title, page] = pid ? ["Patient monitoring", <PatientMonitor key={pid} pid={pid} />]
     : hash.startsWith("#/doctor/patients") ? ["Patient directory", <PatientDirectory />]
       : hash.startsWith("#/doctor/alerts") ? ["Alerts", <AlertsPage />]
+        : hash.startsWith("#/doctor/lab") ? ["Early Detection Lab", <EarlyDetectionLab />]
+        : hash.startsWith("#/doctor/sensor-lab") ? ["Sensor Reliability Lab", <SensorReliabilityLab />]
         : hash.startsWith("#/doctor/data") ? ["Data Management", <DataManagement />]
           : hash.startsWith("#/doctor/video") ? ["Video Consultation", <VideoConsultation role="doctor" />]
             : ["Dashboard", <DoctorDashboard />];
@@ -59,7 +65,7 @@ function DoctorPortal({ user, hash, status, onSignOut }: { user: User; hash: str
   return (
     <NotificationProvider>
       <Shell portal="Doctor Portal" user={user} nav={DOCTOR_NAV} hash={hash} title={title as string} status={status} onSignOut={onSignOut}
-        subtitle="Personalized post-discharge patient monitoring" headerRight={<NotificationBell />}>{page}</Shell>
+        subtitle="Personalized post-discharge patient monitoring" headerRight={<><SoundToggle /><NotificationBell /></>}>{page}</Shell>
     </NotificationProvider>
   );
 }
@@ -109,7 +115,7 @@ export default function App() {
     return <div className="grid min-h-screen place-items-center bg-surface text-sm text-navy-500" role="status">Loading…</div>;
   }
   if (user === null) {
-    return <Login notice={notice ?? (status === "down" ? "The backend is not reachable. Start it with scripts/dev/up.sh." : null)}
+    return <Login notice={notice ?? (status === "down" ? "The server is not reachable right now. Please try again shortly." : null)}
       onSignedIn={(u) => { setNotice(null); setUser(u); window.location.hash = u.role === "doctor" ? "#/doctor" : "#/me"; }} />;
   }
   return user.role === "doctor"
