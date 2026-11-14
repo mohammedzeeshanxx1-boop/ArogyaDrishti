@@ -10,5 +10,5 @@ user experience, and monitoring workflows.
 
 ## Team
 
-- Mohammed Zeeshan — Team Leader
-- Anurag Paul — Team Member
+- Mohammed Zeeshan 
+- Anurag Paul 
